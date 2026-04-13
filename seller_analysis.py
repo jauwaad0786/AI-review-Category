@@ -1,5 +1,6 @@
 import re
 import json
+import time
 import requests
 import os
 from collections import Counter
@@ -17,9 +18,22 @@ GEMINI_URL = (
 OPENAI_URL = "https://api.openai.com/v1/chat/completions"
 
 # ─────────────────────────────────────────────
+# PERSISTENT SESSIONS — reuse TCP connections
+# ─────────────────────────────────────────────
+_gemini_session = requests.Session()
+_gemini_session.headers.update({"Content-Type": "application/json"})
+
+_openai_session = requests.Session()
+_openai_session.headers.update({
+    "Content-Type":  "application/json",
+    "Authorization": f"Bearer {OPENAI_API_KEY}" if OPENAI_API_KEY else "",
+})
+
+# ─────────────────────────────────────────────
 # LAZY SBERT LOAD
 # ─────────────────────────────────────────────
 _sbert_model = None
+
 
 def _get_sbert():
     global _sbert_model
@@ -68,44 +82,53 @@ Return ONLY this JSON, nothing else:
 
 
 # ─────────────────────────────────────────────
-# API CALLS
+# API CALLS — with retry on rate-limit
 # ─────────────────────────────────────────────
 def _call_openai(prompt: str) -> str:
     if not OPENAI_API_KEY:
         raise Exception("No OpenAI key")
-    res = requests.post(
-        OPENAI_URL,
-        headers={"Content-Type": "application/json",
-                 "Authorization": f"Bearer {OPENAI_API_KEY}"},
-        json={"model": "gpt-3.5-turbo",
-              "messages": [{"role": "user", "content": prompt}],
-              "temperature": 0.3},
-        timeout=20
-    )
-    if res.status_code != 200:
-        raise Exception(f"OpenAI HTTP {res.status_code}: {res.text[:150]}")
-    return res.json()["choices"][0]["message"]["content"]
+    for attempt in range(3):
+        res = _openai_session.post(
+            OPENAI_URL,
+            json={
+                "model":       "gpt-3.5-turbo",
+                "messages":    [{"role": "user", "content": prompt}],
+                "temperature": 0.3
+            },
+            timeout=20
+        )
+        if res.status_code == 429:
+            time.sleep(2 ** attempt)
+            continue
+        if res.status_code != 200:
+            raise Exception(f"OpenAI HTTP {res.status_code}: {res.text[:150]}")
+        return res.json()["choices"][0]["message"]["content"]
+    raise Exception("OpenAI: max retries exceeded")
 
 
 def _call_gemini(prompt: str) -> str:
     if not GEMINI_API_KEY:
         raise Exception("No Gemini key")
-    res = requests.post(
-        GEMINI_URL,
-        headers={"Content-Type": "application/json"},
-        json={"contents": [{"parts": [{"text": prompt}]}]},
-        timeout=20
-    )
-    if res.status_code != 200:
-        raise Exception(f"Gemini HTTP {res.status_code}: {res.text[:150]}")
-    return res.json()["candidates"][0]["content"]["parts"][0]["text"]
+    for attempt in range(3):
+        res = _gemini_session.post(
+            GEMINI_URL,
+            json={"contents": [{"parts": [{"text": prompt}]}]},
+            timeout=20
+        )
+        if res.status_code == 429 or res.status_code == 503:
+            time.sleep(2 ** attempt)
+            continue
+        if res.status_code != 200:
+            raise Exception(f"Gemini HTTP {res.status_code}: {res.text[:150]}")
+        return res.json()["candidates"][0]["content"]["parts"][0]["text"]
+    raise Exception("Gemini: max retries exceeded")
 
 
 # ─────────────────────────────────────────────
 # PARSE AI RESPONSE
 # ─────────────────────────────────────────────
 def _parse_response(raw: str, star_rating_avg: float) -> dict:
-    raw = re.sub(r"```json|```", "", raw).strip()
+    raw   = re.sub(r"```json|```", "", raw).strip()
     match = re.search(r"\{.*\}", raw, re.DOTALL)
     if not match:
         raise Exception("No JSON found")
@@ -138,7 +161,6 @@ def _parse_response(raw: str, star_rating_avg: float) -> dict:
 # UNIVERSAL TOPIC MAP
 # ─────────────────────────────────────────────
 TOPIC_MAP = {
-    # Workplace
     "Work Culture":         ["culture", "work culture", "colleagues", "coworkers",
                              "team spirit", "workplace", "environment", "atmosphere",
                              "inclusive", "diversity", "collaborative", "toxic",
@@ -161,8 +183,6 @@ TOPIC_MAP = {
     "Professionalism":      ["professional", "professionalism", "expert", "skilled",
                              "knowledgeable", "competent", "expertise",
                              "industry standard", "dedicated", "proficient"],
-
-    # Product
     "Product Quality":      ["quality", "build quality", "material", "durable",
                              "sturdy", "defective", "broke", "poor quality",
                              "excellent quality", "well built"],
@@ -176,8 +196,6 @@ TOPIC_MAP = {
                              "affordable", "value for money", "cost effective"],
     "Return & Refund":      ["return", "refund", "exchange", "replace",
                              "money back", "cancelled", "cancellation"],
-
-    # Fintech
     "Transaction Speed":    ["transaction", "transfer", "payment", "instant",
                              "slow transfer", "upi", "neft", "imps", "processing"],
     "App Experience":       ["app", "website", "platform", "portal", "ui", "ux",
@@ -187,8 +205,6 @@ TOPIC_MAP = {
                              "kyc", "verification", "otp", "protected", "safe"],
     "Loan & Credit":        ["loan", "credit", "emi", "mortgage", "interest",
                              "bank", "finance", "approve", "sanction"],
-
-    # Real Estate
     "Agent Communication":  ["agent", "broker", "dealer", "follow up",
                              "communication", "replied", "representative"],
     "Deal Speed":           ["delay", "delayed", "slow process", "fast deal",
@@ -199,15 +215,11 @@ TOPIC_MAP = {
                              "lawyer", "paperwork", "stamp duty"],
     "Property Quality":     ["property", "flat", "apartment", "house", "plot",
                              "construction", "possession", "floor plan"],
-
-    # Consulting
     "Consulting Quality":   ["consulting", "consultant", "advisory", "advice",
                              "recommendation", "solution", "it consulting",
                              "business consulting", "insight", "it company"],
     "Project Delivery":     ["project", "deadline", "deliverable", "on time",
                              "milestone", "sprint", "delayed project", "completed"],
-
-    # Generic
     "Overall Experience":   ["good", "great", "amazing", "awesome", "wow",
                              "nice", "excellent", "satisfied", "happy",
                              "recommend", "wonderful", "fantastic", "best",
@@ -234,11 +246,6 @@ NEGATIVE_WORDS = {
 }
 
 
-# ─────────────────────────────────────────────
-# WORD-BOUNDARY MATCH  ← KEY FIX
-# \b handles start/end of string correctly
-# Old space-padding trick failed at sentence boundaries
-# ─────────────────────────────────────────────
 def _topic_match(text: str, keywords: list) -> bool:
     for kw in keywords:
         if re.search(r'\b' + re.escape(kw) + r'\b', text, re.IGNORECASE):
@@ -247,7 +254,7 @@ def _topic_match(text: str, keywords: list) -> bool:
 
 
 def _sentiment_star(sentence: str, overall_star: int) -> int:
-    t = sentence.lower()
+    t         = sentence.lower()
     negated   = bool(re.search(r'\bnot\s+\w+', t))
     pos_count = sum(1 for w in POSITIVE_WORDS
                     if re.search(r'\b' + re.escape(w) + r'\b', t))
@@ -269,9 +276,6 @@ def _sentiment_star(sentence: str, overall_star: int) -> int:
     return overall_star
 
 
-# ─────────────────────────────────────────────
-# CONTEXT DETECTOR
-# ─────────────────────────────────────────────
 CONTEXT_SIGNALS = {
     "workplace":   ["office", "work culture", "colleagues", "management",
                     "salary", "workplace", "work-life", "career", "promotion",
@@ -295,6 +299,7 @@ ENTITY_LABEL = {
     "general":     "entity",
 }
 
+
 def _detect_context(all_text: str) -> str:
     t = all_text.lower()
     scores = {
@@ -308,9 +313,6 @@ def _detect_context(all_text: str) -> str:
     return best if scores[best] > 0 else "general"
 
 
-# ─────────────────────────────────────────────
-# SBERT CATEGORY CLUSTERING
-# ─────────────────────────────────────────────
 def _sbert_categories(all_sentences: list, star_map: dict,
                        overall_avg: float) -> list[dict]:
     sbert = _get_sbert()
@@ -322,8 +324,8 @@ def _sbert_categories(all_sentences: list, star_map: dict,
         from sklearn.cluster import KMeans
         from sklearn.metrics import silhouette_score
 
-        embeddings = sbert.encode(all_sentences, convert_to_numpy=True)
-        n      = len(all_sentences)
+        embeddings             = sbert.encode(all_sentences, convert_to_numpy=True)
+        n                      = len(all_sentences)
         best_score, best_labels = -1, None
 
         for k in range(2, min(8, n) + 1):
@@ -333,7 +335,7 @@ def _sbert_categories(all_sentences: list, star_map: dict,
                 score  = silhouette_score(embeddings, labels)
                 if score > best_score:
                     best_score, best_labels = score, labels
-            except:
+            except Exception:
                 pass
 
         if best_labels is None:
@@ -347,9 +349,7 @@ def _sbert_categories(all_sentences: list, star_map: dict,
         seen_topics = set()
 
         for cluster_sents in clusters.values():
-            combined = " ".join(cluster_sents)
-
-            # Best matching topic for this cluster
+            combined   = " ".join(cluster_sents)
             best_topic, best_count = "Overall Experience", 0
             for topic, keywords in TOPIC_MAP.items():
                 if topic == "Overall Experience":
@@ -386,9 +386,6 @@ def _sbert_categories(all_sentences: list, star_map: dict,
         return []
 
 
-# ─────────────────────────────────────────────
-# SBERT INTENT SUMMARY
-# ─────────────────────────────────────────────
 def _sbert_summary(reviews: list, context: str, avg_rating: float) -> str | None:
     sbert = _get_sbert()
     if sbert is None or len(reviews) < 2:
@@ -411,7 +408,7 @@ def _sbert_summary(reviews: list, context: str, avg_rating: float) -> str | None
                 score  = silhouette_score(embeddings, labels)
                 if score > best_score:
                     best_score, best_labels = score, labels
-            except:
+            except Exception:
                 pass
 
         if best_labels is None:
@@ -421,9 +418,9 @@ def _sbert_summary(reviews: list, context: str, avg_rating: float) -> str | None
         for rev, label in zip(reviews, best_labels):
             clusters.setdefault(int(label), []).append(rev)
 
-        entity         = ENTITY_LABEL.get(context, "entity")
-        pos_themes     = []
-        neg_themes     = []
+        entity     = ENTITY_LABEL.get(context, "entity")
+        pos_themes = []
+        neg_themes = []
 
         for cluster_revs in clusters.values():
             combined  = " ".join(r["review_text"] for r in cluster_revs).lower()
@@ -458,10 +455,9 @@ def _sbert_summary(reviews: list, context: str, avg_rating: float) -> str | None
 
         if pos_themes:
             topics = ", ".join(dict.fromkeys(
-                t["topic"] for t in pos_themes
-                if t["topic"] != "Overall Experience"
+                t["topic"] for t in pos_themes if t["topic"] != "Overall Experience"
             ))
-            kws = list(dict.fromkeys(
+            kws    = list(dict.fromkeys(
                 kw for t in pos_themes for kw in t["pos_kws"]
             ))[:3]
             kw_str = ", ".join(kws) if kws else "overall quality"
@@ -478,17 +474,14 @@ def _sbert_summary(reviews: list, context: str, avg_rating: float) -> str | None
 
         if neg_themes:
             topics = ", ".join(dict.fromkeys(
-                t["topic"] for t in neg_themes
-                if t["topic"] != "Overall Experience"
+                t["topic"] for t in neg_themes if t["topic"] != "Overall Experience"
             ))
-            kws = list(dict.fromkeys(
+            kws    = list(dict.fromkeys(
                 kw for t in neg_themes for kw in t["neg_kws"]
             ))[:2]
-            note = f" — particularly around {', '.join(kws)}" if kws else ""
+            note   = f" — particularly around {', '.join(kws)}" if kws else ""
             if topics:
-                parts.append(
-                    f"Some reviewers flag concerns with {topics}{note}."
-                )
+                parts.append(f"Some reviewers flag concerns with {topics}{note}.")
 
         if not parts:
             parts.append(
@@ -504,9 +497,6 @@ def _sbert_summary(reviews: list, context: str, avg_rating: float) -> str | None
         return None
 
 
-# ─────────────────────────────────────────────
-# KEYWORD CATEGORIES — regex word-boundary
-# ─────────────────────────────────────────────
 def _keyword_categories(reviews: list) -> list[dict]:
     topic_data: dict = {}
 
@@ -515,7 +505,6 @@ def _keyword_categories(reviews: list) -> list[dict]:
         text  = r["review_text"].lower()
         stars = r["star_rating"]
 
-        # Split sentences + contrast handling
         raw_sents = re.split(r'[.!?]', text)
         sentences = []
         for s in raw_sents:
@@ -526,14 +515,13 @@ def _keyword_categories(reviews: list) -> list[dict]:
             elif s.strip():
                 sentences.append(s.strip())
 
-        # Also include comma-separated parts as extra sentences
         comma_parts = re.split(r'[,;]', text)
         if len(comma_parts) >= 2:
             sentences.extend(p.strip() for p in comma_parts if p.strip())
 
-        sentences = list(dict.fromkeys(s for s in sentences if s))
-
+        sentences   = list(dict.fromkeys(s for s in sentences if s))
         matched_any = False
+
         for topic, keywords in TOPIC_MAP.items():
             if topic in used_topics:
                 continue
@@ -542,11 +530,10 @@ def _keyword_categories(reviews: list) -> list[dict]:
                     used_topics.add(topic)
                     topic_data.setdefault(topic, {"stars": [], "count": 0})
 
-                    neg = any(re.search(r'\b' + re.escape(w) + r'\b', sent)
-                              for w in NEGATIVE_WORDS)
-                    pos = any(re.search(r'\b' + re.escape(w) + r'\b', sent)
-                              for w in POSITIVE_WORDS)
-
+                    neg  = any(re.search(r'\b' + re.escape(w) + r'\b', sent)
+                               for w in NEGATIVE_WORDS)
+                    pos  = any(re.search(r'\b' + re.escape(w) + r'\b', sent)
+                               for w in POSITIVE_WORDS)
                     star = (max(1, stars - 2) if neg and not pos else
                             min(5, stars)     if pos and not neg else
                             max(2, stars - 1) if neg and pos else stars)
@@ -563,16 +550,13 @@ def _keyword_categories(reviews: list) -> list[dict]:
 
     categories = [
         {"name": cat,
-         "avg_star": round(sum(d["stars"]) / len(d["stars"]), 1),
+         "avg_star":     round(sum(d["stars"]) / len(d["stars"]), 1),
          "review_count": d["count"]}
         for cat, d in topic_data.items()
     ]
     return sorted(categories, key=lambda x: x["review_count"], reverse=True)[:10]
 
 
-# ─────────────────────────────────────────────
-# NLP FALLBACK — SBERT + keyword + smart summary
-# ─────────────────────────────────────────────
 def _nlp_fallback(reviews: list) -> dict:
     total      = len(reviews)
     avg_rating = sum(r["star_rating"] for r in reviews) / total if total else 3
@@ -580,7 +564,6 @@ def _nlp_fallback(reviews: list) -> dict:
     context    = _detect_context(all_text)
     entity     = ENTITY_LABEL.get(context, "entity")
 
-    # ── Categories: SBERT first, keyword fallback ──
     all_sents: list = []
     star_map: dict  = {}
     for r in reviews:
@@ -601,14 +584,12 @@ def _nlp_fallback(reviews: list) -> dict:
                        "avg_star": round(avg_rating, 1),
                        "review_count": total}]
 
-    # ── Intent summary: SBERT → AI → smart keyword ──
     intent_summary = _sbert_summary(reviews, context, avg_rating)
 
     if not intent_summary:
-        # Try AI with compressed sample
-        pos_revs    = [r for r in reviews if r["star_rating"] >= 4]
-        neg_revs    = [r for r in reviews if r["star_rating"] < 4]
-        compressed  = (
+        pos_revs   = [r for r in reviews if r["star_rating"] >= 4]
+        neg_revs   = [r for r in reviews if r["star_rating"] < 4]
+        compressed = (
             [f"[Positive] {r['review_text'][:80]}" for r in pos_revs[:4]] +
             [f"[Negative] {r['review_text'][:80]}" for r in neg_revs[:3]]
         )
@@ -633,18 +614,16 @@ Return ONLY the summary text."""
                 pass
 
     if not intent_summary:
-        # Pure keyword summary — zero hardcoded domain text
-        all_lower   = all_text.lower()
-        pos_kws     = [w for w in POSITIVE_WORDS
-                       if re.search(r'\b' + re.escape(w) + r'\b', all_lower)][:3]
-        neg_kws     = [w for w in NEGATIVE_WORDS
-                       if re.search(r'\b' + re.escape(w) + r'\b', all_lower)][:2]
-        top_cat     = categories[0]["name"] if categories else "Overall Experience"
-        pos_count   = sum(1 for r in reviews if r["star_rating"] >= 4)
-        pos_pct     = round(pos_count / total * 100, 1)
-
-        kw_str      = ", ".join(pos_kws) if pos_kws else "quality and service"
-        concern_str = ", ".join(neg_kws) if neg_kws else None
+        all_lower = all_text.lower()
+        pos_kws   = [w for w in POSITIVE_WORDS
+                     if re.search(r'\b' + re.escape(w) + r'\b', all_lower)][:3]
+        neg_kws   = [w for w in NEGATIVE_WORDS
+                     if re.search(r'\b' + re.escape(w) + r'\b', all_lower)][:2]
+        top_cat   = categories[0]["name"] if categories else "Overall Experience"
+        pos_count = sum(1 for r in reviews if r["star_rating"] >= 4)
+        pos_pct   = round(pos_count / total * 100, 1)
+        kw_str    = ", ".join(pos_kws) if pos_kws else "quality and service"
+        concern   = ", ".join(neg_kws) if neg_kws else None
 
         if pos_pct >= 80 and avg_rating >= 4.0:
             intent_summary = (
@@ -654,11 +633,11 @@ Return ONLY the summary text."""
                 f"The {round(avg_rating, 1)}/5 average across {total} reviews "
                 f"reflects broadly positive sentiment."
             )
-        elif concern_str:
+        elif concern:
             intent_summary = (
                 f"Most customers appreciate this {entity} — especially {kw_str} "
                 f"and {top_cat.lower()}. "
-                f"A portion of reviews highlight concerns around {concern_str}, "
+                f"A portion of reviews highlight concerns around {concern}, "
                 f"with an overall average of {round(avg_rating, 1)}/5."
             )
         else:
@@ -698,8 +677,7 @@ def analyze_seller(seller_id: int, reviews: list) -> dict:
             "source":         "empty"
         }
 
-    avg_star = sum(r["star_rating"] for r in reviews) / total
-
+    avg_star     = sum(r["star_rating"] for r in reviews) / total
     sampled      = reviews[:30]
     reviews_text = "\n".join(
         f"[{i+1}] Stars:{r['star_rating']} — {r['review_text']}"
@@ -707,31 +685,26 @@ def analyze_seller(seller_id: int, reviews: list) -> dict:
     )
     prompt = _build_prompt(reviews_text, len(sampled))
 
-    # ── Try OpenAI ──
     try:
         print(f"  [SellerAnalysis] Trying OpenAI...")
         raw    = _call_openai(prompt)
         result = _parse_response(raw, avg_star)
-        result.update({"seller_id": seller_id, "total_reviews": total,
-                        "source": "OpenAI"})
+        result.update({"seller_id": seller_id, "total_reviews": total, "source": "OpenAI"})
         print(f"  [SellerAnalysis] OpenAI ok")
         return result
     except Exception as e:
         print(f"  [SellerAnalysis] OpenAI failed: {e}")
 
-    # ── Try Gemini ──
     try:
         print(f"  [SellerAnalysis] Trying Gemini...")
         raw    = _call_gemini(prompt)
         result = _parse_response(raw, avg_star)
-        result.update({"seller_id": seller_id, "total_reviews": total,
-                        "source": "Gemini"})
+        result.update({"seller_id": seller_id, "total_reviews": total, "source": "Gemini"})
         print(f"  [SellerAnalysis] Gemini ok")
         return result
     except Exception as e:
         print(f"  [SellerAnalysis] Gemini failed: {e}")
 
-    # ── NLP + SBERT fallback ──
     print(f"  [SellerAnalysis] NLP+SBERT fallback")
     result = _nlp_fallback(reviews)
     result.update({"seller_id": seller_id, "total_reviews": total})

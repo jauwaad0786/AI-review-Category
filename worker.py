@@ -1,13 +1,22 @@
 import time
 import os
 from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dotenv import load_dotenv
 from db import get_connection
 from gemini_client import analyze_review
 from moderator import moderate_review
 
 load_dotenv()
-POLL_INTERVAL = int(os.getenv("POLL_INTERVAL", 5))
+POLL_INTERVAL       = int(os.getenv("POLL_INTERVAL", 10))   # was hardcoded 5
+
+# ─────────────────────────────────────────────
+# THREAD POOL — parallel processing
+# Moderation:     10 threads  (I/O-bound: Gemini HTTP call)
+# Categorization:  5 threads  (AI API rate-limited — safer at 5)
+# ─────────────────────────────────────────────
+_mod_pool  = ThreadPoolExecutor(max_workers=10, thread_name_prefix="mod")
+_cat_pool  = ThreadPoolExecutor(max_workers=5,  thread_name_prefix="cat")
 
 
 # ─────────────────────────────────────────────
@@ -20,8 +29,8 @@ def fetch_pending(conn):
         FROM reviews
         WHERE status = 'pending'
         ORDER BY created_at ASC
-        LIMIT 20
-    """)
+        LIMIT 50
+    """)                                            # batch 20 → 50
     rows = cursor.fetchall()
     cursor.close()
     return rows
@@ -37,8 +46,8 @@ def fetch_approved_unprocessed(conn):
         FROM reviews
         WHERE status = 'approved' AND is_processed = FALSE
         ORDER BY created_at ASC
-        LIMIT 20
-    """)
+        LIMIT 50
+    """)                                            # batch 20 → 50
     rows = cursor.fetchall()
     cursor.close()
     return rows
@@ -57,7 +66,7 @@ def update_status(conn, review_id: int, status: str, reason: str = ""):
 
 
 # ─────────────────────────────────────────────
-# INSERT INTO review_analysis (3 rows per review)
+# INSERT INTO review_analysis
 # ─────────────────────────────────────────────
 def insert_analysis(conn, review_id: int, seller_id: int, categories: list):
     cursor = conn.cursor()
@@ -67,7 +76,6 @@ def insert_analysis(conn, review_id: int, seller_id: int, categories: list):
             continue
         if "category" not in item or "category_star" not in item:
             continue
-
         cursor.execute("""
             INSERT INTO review_analysis
                 (review_id, seller_id, category, category_star, processed_at)
@@ -86,16 +94,12 @@ def update_seller_category_rating(conn, seller_id: int, categories: list):
         if not isinstance(item, dict):
             print("  ⚠ Skipping invalid item:", item)
             continue
-
         if "category" not in item or "category_star" not in item:
             print("  ⚠ Missing keys:", item)
             continue
 
-        cat = str(item["category"]).strip()
-        new_star = int(item["category_star"])
-
-        # optional safety
-        new_star = max(1, min(5, new_star))
+        cat      = str(item["category"]).strip()
+        new_star = max(1, min(5, int(item["category_star"])))
 
         cursor.execute("""
             SELECT avg_star, total_reviews
@@ -167,7 +171,7 @@ def mark_processed(conn, review_id: int):
 
 
 # ─────────────────────────────────────────────
-# STEP 1 — MODERATION
+# STEP 1 — MODERATION (runs in thread pool)
 # ─────────────────────────────────────────────
 def run_moderation(review: dict):
     review_id   = review["id"]
@@ -175,7 +179,6 @@ def run_moderation(review: dict):
     star_rating = review["star_rating"]
 
     print(f"[{datetime.now().strftime('%H:%M:%S')}] Moderating id={review_id}")
-
     status, reason = moderate_review(review_text, star_rating)
 
     conn = get_connection()
@@ -183,16 +186,16 @@ def run_moderation(review: dict):
         update_status(conn, review_id, status, reason)
         conn.commit()
         icon = "✓ APPROVED" if status == "approved" else "✗ REJECTED"
-        print(f"  {icon} | {reason}\n")
+        print(f"  {icon} id={review_id} | {reason}")
     except Exception as e:
         conn.rollback()
-        print(f"  DB Error: {e}\n")
+        print(f"  DB Error id={review_id}: {e}")
     finally:
         conn.close()
 
 
 # ─────────────────────────────────────────────
-# STEP 2 — AI CATEGORIZATION
+# STEP 2 — AI CATEGORIZATION (runs in thread pool)
 # ─────────────────────────────────────────────
 def run_categorization(review: dict):
     review_id   = review["id"]
@@ -205,7 +208,7 @@ def run_categorization(review: dict):
     try:
         categories = analyze_review(review_text, star_rating)
     except Exception as e:
-        print(f"  analyze_review crashed: {e}")
+        print(f"  analyze_review crashed id={review_id}: {e}")
         categories = []
 
     if not isinstance(categories, list) or len(categories) == 0:
@@ -218,14 +221,14 @@ def run_categorization(review: dict):
         if "category" not in cat or "category_star" not in cat:
             continue
         safe_categories.append({
-            "category": str(cat["category"])[:150],
+            "category":     str(cat["category"])[:150],
             "category_star": int(max(1, min(5, cat["category_star"])))
         })
 
     if not safe_categories:
         safe_categories = [{"category": "Overall Experience", "category_star": star_rating}]
 
-    print(f"  Inserting: {safe_categories}")
+    print(f"  Inserting id={review_id}: {safe_categories}")
 
     conn = get_connection()
     try:
@@ -234,18 +237,32 @@ def run_categorization(review: dict):
         update_seller_rating(conn, seller_id, star_rating)
         mark_processed(conn, review_id)
         conn.commit()
-        print(f"  ✓ Done\n")
+        print(f"  ✓ Done id={review_id}")
     except Exception as e:
         conn.rollback()
-        print(f"  ✗ DB Error: {e}\n")
-        # Phir bhi mark processed karo taaki infinite loop band ho
+        print(f"  ✗ DB Error id={review_id}: {e}")
         try:
             mark_processed(conn, review_id)
             conn.commit()
-        except:
+        except Exception:
             pass
     finally:
         conn.close()
+
+
+# ─────────────────────────────────────────────
+# PARALLEL BATCH — submit all to thread pool, wait for all
+# ─────────────────────────────────────────────
+def _run_batch_parallel(pool: ThreadPoolExecutor, fn, items: list, label: str):
+    if not items:
+        return
+    futures = {pool.submit(fn, item): item["id"] for item in items}
+    for future in as_completed(futures):
+        rid = futures[future]
+        try:
+            future.result()
+        except Exception as e:
+            print(f"  [{label}] Thread error id={rid}: {e}")
 
 
 # ─────────────────────────────────────────────
@@ -254,26 +271,25 @@ def run_categorization(review: dict):
 def run_worker():
     print("=" * 52)
     print("  easeMyDeal Review Worker — STARTED")
-    print(f"  Poll every {POLL_INTERVAL}s | 3 fixed categories")
+    print(f"  Poll every {POLL_INTERVAL}s | Parallel threads")
+    print(f"  Moderation: 10 threads | Categorization: 5 threads")
     print("  Step 1: Moderate → Step 2: AI Categorize")
     print("=" * 52)
 
     while True:
         try:
-            conn = get_connection()
+            conn          = get_connection()
             pending       = fetch_pending(conn)
             to_categorize = fetch_approved_unprocessed(conn)
             conn.close()
 
             if pending:
-                print(f"\n[Worker] {len(pending)} pending moderation")
-                for r in pending:
-                    run_moderation(r)
+                print(f"\n[Worker] {len(pending)} pending moderation (parallel)")
+                _run_batch_parallel(_mod_pool, run_moderation, pending, "MOD")
 
             if to_categorize:
-                print(f"\n[Worker] {len(to_categorize)} approved → categorize")
-                for r in to_categorize:
-                    run_categorization(r)
+                print(f"\n[Worker] {len(to_categorize)} approved → categorize (parallel)")
+                _run_batch_parallel(_cat_pool, run_categorization, to_categorize, "CAT")
 
             if not pending and not to_categorize:
                 print(f"[{datetime.now().strftime('%H:%M:%S')}] idle... ({POLL_INTERVAL}s)")

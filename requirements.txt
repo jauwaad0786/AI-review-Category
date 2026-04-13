@@ -3,11 +3,9 @@ flask==3.0.3
 flask-cors==4.0.1
 python-dotenv==1.0.1
 requests
+gunicorn
 sentence-transformers==2.7.0
 scikit-learn
 numpy
-
-
 transformers
 torch
-

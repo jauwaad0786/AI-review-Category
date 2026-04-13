@@ -1,6 +1,7 @@
 import json
 import os
 import re
+import time
 import requests
 from dotenv import load_dotenv
 
@@ -16,10 +17,24 @@ GEMINI_URL = (
 OPENAI_URL = "https://api.openai.com/v1/chat/completions"
 
 # ─────────────────────────────────────────────
+# PERSISTENT SESSIONS — reuse TCP connections
+# One session per API endpoint (different base URLs)
+# ─────────────────────────────────────────────
+_gemini_session = requests.Session()
+_gemini_session.headers.update({"Content-Type": "application/json"})
+
+_openai_session = requests.Session()
+_openai_session.headers.update({
+    "Content-Type":  "application/json",
+    "Authorization": f"Bearer {OPENAI_API_KEY}" if OPENAI_API_KEY else "",
+})
+
+# ─────────────────────────────────────────────
 # SBERT + Clustering — lazy load (heavy import)
 # ─────────────────────────────────────────────
 _sbert_model      = None
 _sentiment_model  = None
+
 
 def _get_sbert():
     global _sbert_model
@@ -30,6 +45,7 @@ def _get_sbert():
         except Exception as e:
             print(f"  [SBERT] Load failed: {e}")
     return _sbert_model
+
 
 def _get_bert_sentiment():
     global _sentiment_model
@@ -91,39 +107,44 @@ Return ONLY a JSON array, nothing else:
 
 
 # ─────────────────────────────────────────────
-# API CALLS
+# API CALLS — with retry on rate-limit
 # ─────────────────────────────────────────────
 def _call_openai(prompt: str) -> str:
     if not OPENAI_API_KEY:
         raise Exception("No OpenAI key in .env")
-    res = requests.post(
-        OPENAI_URL,
-        headers={
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {OPENAI_API_KEY}"
-        },
-        json={
-            "model": "gpt-3.5-turbo",
-            "messages": [{"role": "user", "content": prompt}],
-            "temperature": 0.2
-        },
-        timeout=15
-    )
-    if res.status_code != 200:
-        raise Exception(f"OpenAI HTTP {res.status_code}: {res.text[:150]}")
-    return res.json()["choices"][0]["message"]["content"]
+    for attempt in range(3):
+        res = _openai_session.post(
+            OPENAI_URL,
+            json={
+                "model":       "gpt-3.5-turbo",
+                "messages":    [{"role": "user", "content": prompt}],
+                "temperature": 0.2
+            },
+            timeout=15
+        )
+        if res.status_code == 429:
+            time.sleep(2 ** attempt)
+            continue
+        if res.status_code != 200:
+            raise Exception(f"OpenAI HTTP {res.status_code}: {res.text[:150]}")
+        return res.json()["choices"][0]["message"]["content"]
+    raise Exception("OpenAI: max retries exceeded")
 
 
 def _call_gemini(prompt: str) -> str:
-    res = requests.post(
-        GEMINI_URL,
-        headers={"Content-Type": "application/json"},
-        json={"contents": [{"parts": [{"text": prompt}]}]},
-        timeout=15
-    )
-    if res.status_code != 200:
-        raise Exception(f"Gemini HTTP {res.status_code}: {res.text[:150]}")
-    return res.json()["candidates"][0]["content"]["parts"][0]["text"]
+    for attempt in range(3):
+        res = _gemini_session.post(
+            GEMINI_URL,
+            json={"contents": [{"parts": [{"text": prompt}]}]},
+            timeout=15
+        )
+        if res.status_code == 429 or res.status_code == 503:
+            time.sleep(2 ** attempt)
+            continue
+        if res.status_code != 200:
+            raise Exception(f"Gemini HTTP {res.status_code}: {res.text[:150]}")
+        return res.json()["candidates"][0]["content"]["parts"][0]["text"]
+    raise Exception("Gemini: max retries exceeded")
 
 
 # ─────────────────────────────────────────────
@@ -147,10 +168,10 @@ def _parse_json(raw: str, star_rating: int) -> list[dict]:
                     continue
                 try:
                     star = int(float(star)) if star is not None else star_rating
-                except:
+                except Exception:
                     star = star_rating
                 fixed.append({
-                    "category": str(cat).strip(),
+                    "category":      str(cat).strip(),
                     "category_star": max(1, min(5, star))
                 })
             if fixed:
@@ -161,10 +182,8 @@ def _parse_json(raw: str, star_rating: int) -> list[dict]:
 
 # ─────────────────────────────────────────────
 # UNIVERSAL TOPIC KEYWORDS
-# Covers: workplace, product, fintech, real estate, consulting
 # ─────────────────────────────────────────────
 TOPIC_KEYWORDS = {
-    # ── Workplace / Organization ──
     "Work Culture":         ["culture", "work culture", "environment", "atmosphere",
                              "vibe", "colleagues", "coworkers", "collaborative",
                              "toxic", "inclusive", "nice culture", "great culture"],
@@ -185,8 +204,6 @@ TOPIC_KEYWORDS = {
     "Professionalism":      ["professional", "professionalism", "expert", "skilled",
                              "knowledgeable", "competent", "industry standard",
                              "positive professionalism"],
-
-    # ── Product / E-commerce ──
     "Product Quality":      ["quality", "build quality", "material", "durable",
                              "sturdy", "defective", "broke", "poor quality"],
     "Delivery & Shipping":  ["delivery", "shipping", "dispatch", "arrived",
@@ -198,8 +215,6 @@ TOPIC_KEYWORDS = {
                              "value for money"],
     "Return & Refund":      ["return", "refund", "exchange", "replace",
                              "money back", "cancelled", "cancellation"],
-
-    # ── Fintech / Banking ──
     "Transaction Speed":    ["transaction", "transfer", "payment", "instant",
                              "slow transfer", "upi", "neft", "imps", "processing"],
     "App / Platform UX":    ["app", "website", "platform", "portal", "ui", "ux",
@@ -209,8 +224,6 @@ TOPIC_KEYWORDS = {
                              "kyc", "verification", "otp", "protected", "safe"],
     "Loan & Credit":        ["loan", "credit", "emi", "mortgage", "interest",
                              "bank", "finance", "approve", "sanction"],
-
-    # ── Real Estate ──
     "Agent Communication":  ["agent", "broker", "dealer", "follow up", "contact",
                              "communication", "replied", "representative"],
     "Deal Speed":           ["delay", "delayed", "slow process", "fast deal",
@@ -221,15 +234,11 @@ TOPIC_KEYWORDS = {
                              "registry", "lawyer", "paperwork", "stamp duty"],
     "Property Quality":     ["property", "flat", "apartment", "house", "plot",
                              "construction", "possession", "floor plan"],
-
-    # ── Consulting / Services ──
     "Consulting Quality":   ["consulting", "consultant", "advisory", "advice",
                              "recommendation", "solution", "it consulting",
                              "business consulting", "expertise"],
     "Project Delivery":     ["project", "deadline", "deliverable", "on time",
                              "milestone", "sprint", "delayed project"],
-
-    # ── Generic ──
     "Overall Experience":   ["good", "great", "amazing", "awesome", "wow",
                              "nice", "excellent", "satisfied", "happy",
                              "recommend", "wonderful", "fantastic", "best",
@@ -238,7 +247,6 @@ TOPIC_KEYWORDS = {
                              "great organization", "awesome organization"],
 }
 
-# Canonical category set — used by _match_topic to avoid inventing names
 CANONICAL_CATEGORIES = set(TOPIC_KEYWORDS.keys())
 
 POS_WORDS = {
@@ -262,7 +270,7 @@ NEG_WORDS = {
 
 
 def _nlp_sentiment_star(sentence: str, overall_star: int) -> int:
-    t = sentence.lower()
+    t       = sentence.lower()
     negated = bool(re.search(r"\bnot\s+\w+", t))
 
     pos_count = sum(1 for w in POS_WORDS if w in t)
@@ -286,57 +294,34 @@ def _nlp_sentiment_star(sentence: str, overall_star: int) -> int:
         return overall_star
 
 
-# ─────────────────────────────────────────────
-# COMMA-LIST HANDLER
-# "Responsiveness, Quality, Professionalism, Value" → multiple categories
-# ─────────────────────────────────────────────
 def _expand_comma_list(review_text: str, star_rating: int) -> list[dict] | None:
-    """
-    If review is mostly a comma-separated list of traits,
-    map each to a canonical category with star_rating stars.
-    Returns list or None if not a comma-list review.
-    """
     text = review_text.strip()
-    # Detect: mostly comma-separated words/phrases, short overall
     if "," not in text:
         return None
-    # Remove leading words like "Positive", "Good", "Great"
     cleaned = re.sub(r"^(positive|good|great|excellent|amazing|nice)\s*[,:]?\s*",
                      "", text, flags=re.IGNORECASE).strip()
     parts = [p.strip() for p in re.split(r"[,;]", cleaned) if p.strip()]
 
-    # Only treat as comma list if 2+ parts and each part is short (1-3 words)
     if len(parts) < 2:
         return None
     if not all(len(p.split()) <= 3 for p in parts):
         return None
 
     results = []
-    seen = set()
+    seen    = set()
     for part in parts:
         cat = _match_topic(part)
         if cat not in seen:
             seen.add(cat)
-            results.append({
-                "category":     cat,
-                "category_star": star_rating
-            })
+            results.append({"category": cat, "category_star": star_rating})
     return results[:5] if results else None
 
 
-# ─────────────────────────────────────────────
-# MATCH TOPIC — returns canonical category name
-# ─────────────────────────────────────────────
 def _match_topic(text: str) -> str:
-    """Map text to a canonical category. Never invents new names."""
     t = text.lower().strip()
-
-    # Direct keyword match
     for topic, keywords in TOPIC_KEYWORDS.items():
         if any(kw in t for kw in keywords):
             return topic
-
-    # Fallback: check if any word in text is a substring of a canonical name
     words = [w for w in re.findall(r"[a-z]{4,}", t)
              if w not in {"this", "that", "with", "have", "been", "from",
                           "they", "their", "about", "would", "could", "should"}]
@@ -344,25 +329,18 @@ def _match_topic(text: str) -> str:
         for topic in CANONICAL_CATEGORIES:
             if word in topic.lower():
                 return topic
-
-    # Safe default — never "SomeWord Experience"
     return "Overall Experience"
 
 
-# ─────────────────────────────────────────────
-# SMART NLP FALLBACK — sentence-level with contrast
-# ─────────────────────────────────────────────
 def _smart_nlp_fallback(review_text: str, star_rating: int) -> list[dict]:
     text = review_text.lower().strip()
 
-    # Check if it's a comma-list review first
     expanded = _expand_comma_list(review_text, star_rating)
     if expanded:
         return expanded
 
-    # Split by contrast words
     raw_sentences = re.split(r"[.!?]", text)
-    sentences = []
+    sentences     = []
     for s in raw_sentences:
         if re.search(r"\bbut\b|\bhowever\b|\balthough\b|\bthough\b", s):
             parts = re.split(r"\bbut\b|\bhowever\b|\balthough\b|\bthough\b", s)
@@ -371,43 +349,29 @@ def _smart_nlp_fallback(review_text: str, star_rating: int) -> list[dict]:
             if s.strip():
                 sentences.append(s.strip())
 
-    results = []
-    seen_categories = set()
+    results          = []
+    seen_categories  = set()
 
     for sentence in sentences:
         if len(sentence.split()) < 2:
             continue
-
         matched_topic = None
         for topic, keywords in TOPIC_KEYWORDS.items():
             if any(kw in sentence for kw in keywords):
                 matched_topic = topic
                 break
-
-        if not matched_topic:
+        if not matched_topic or matched_topic in seen_categories:
             continue
-        if matched_topic in seen_categories:
-            continue
-
         seen_categories.add(matched_topic)
         star = _nlp_sentiment_star(sentence, star_rating)
-        results.append({
-            "category":      matched_topic,
-            "category_star": star
-        })
+        results.append({"category": matched_topic, "category_star": star})
 
     if not results:
-        results.append({
-            "category":      "Overall Experience",
-            "category_star": star_rating
-        })
+        results.append({"category": "Overall Experience", "category_star": star_rating})
 
     return results[:5]
 
 
-# ─────────────────────────────────────────────
-# SBERT FALLBACK
-# ─────────────────────────────────────────────
 def _sbert_fallback(review_text: str, star_rating: int) -> list[dict]:
     sbert = _get_sbert()
     if sbert is None:
@@ -417,7 +381,7 @@ def _sbert_fallback(review_text: str, star_rating: int) -> list[dict]:
     from sklearn.metrics import silhouette_score
     import numpy as np
 
-    raw = re.split(r"[.!?]", review_text.lower())
+    raw       = re.split(r"[.!?]", review_text.lower())
     sentences = []
     for s in raw:
         if re.search(r"\bbut\b|\bhowever\b|\balthough\b", s):
@@ -436,17 +400,16 @@ def _sbert_fallback(review_text: str, star_rating: int) -> list[dict]:
         star = _nlp_sentiment_star(sentences[0], star_rating)
         return [{"category": cat, "category_star": star}]
 
-    embeddings = sbert.encode(sentences, convert_to_numpy=True)
-
+    embeddings                  = sbert.encode(sentences, convert_to_numpy=True)
     best_k, best_score, best_labels = 2, -1, None
     for k in range(2, min(4, len(sentences)) + 1):
         try:
-            kmeans = KMeans(n_clusters=k, random_state=42, n_init=10)
-            labels = kmeans.fit_predict(embeddings)
-            score  = silhouette_score(embeddings, labels)
+            kmeans  = KMeans(n_clusters=k, random_state=42, n_init=10)
+            labels  = kmeans.fit_predict(embeddings)
+            score   = silhouette_score(embeddings, labels)
             if score > best_score:
                 best_score, best_labels = score, labels
-        except:
+        except Exception:
             pass
 
     if best_labels is None:
@@ -457,11 +420,11 @@ def _sbert_fallback(review_text: str, star_rating: int) -> list[dict]:
         clusters.setdefault(label, []).append(sent)
 
     results = []
-    seen = set()
+    seen    = set()
     for cluster_sentences in clusters.values():
         combined = " ".join(cluster_sentences)
-        cat  = _match_topic(combined)
-        star = _nlp_sentiment_star(combined, star_rating)
+        cat      = _match_topic(combined)
+        star     = _nlp_sentiment_star(combined, star_rating)
         if cat not in seen:
             seen.add(cat)
             results.append({"category": cat, "category_star": star})
@@ -469,11 +432,8 @@ def _sbert_fallback(review_text: str, star_rating: int) -> list[dict]:
     return results[:5] if results else _smart_nlp_fallback(review_text, star_rating)
 
 
-# ─────────────────────────────────────────────
-# BERT SENTIMENT FALLBACK
-# ─────────────────────────────────────────────
 def _bert_nlp_fallback(review_text: str, star_rating: int) -> list[dict]:
-    model = _get_bert_sentiment()
+    model      = _get_bert_sentiment()
     nlp_result = _smart_nlp_fallback(review_text, star_rating)
 
     if model is None:
@@ -483,7 +443,6 @@ def _bert_nlp_fallback(review_text: str, star_rating: int) -> list[dict]:
         text_short = review_text[:512]
         bert_out   = model(text_short)[0]
         label      = bert_out["label"]
-
         for item in nlp_result:
             if label == "POSITIVE":
                 item["category_star"] = min(5, item["category_star"] + 1)
@@ -509,7 +468,6 @@ def analyze_review(review_text: str, star_rating: int) -> list[dict]:
         star_rating=star_rating
     )
 
-    # ── OpenAI ──
     try:
         print("  Trying OpenAI...")
         raw    = _call_openai(prompt)
@@ -519,7 +477,6 @@ def analyze_review(review_text: str, star_rating: int) -> list[dict]:
     except Exception as e:
         print(f"  OpenAI failed: {e}")
 
-    # ── Gemini ──
     try:
         print("  Trying Gemini...")
         raw    = _call_gemini(prompt)
@@ -529,7 +486,6 @@ def analyze_review(review_text: str, star_rating: int) -> list[dict]:
     except Exception as e:
         print(f"  Gemini failed: {e}")
 
-    # ── SBERT Clustering ──
     try:
         print("  Trying SBERT...")
         result = _sbert_fallback(review_text, star_rating)
@@ -539,7 +495,6 @@ def analyze_review(review_text: str, star_rating: int) -> list[dict]:
     except Exception as e:
         print(f"  SBERT failed: {e}")
 
-    # ── BERT + NLP ──
     try:
         print("  Trying BERT+NLP...")
         result = _bert_nlp_fallback(review_text, star_rating)
@@ -549,7 +504,6 @@ def analyze_review(review_text: str, star_rating: int) -> list[dict]:
     except Exception as e:
         print(f"  BERT+NLP failed: {e}")
 
-    # ── Final NLP ──
     print("  Using NLP fallback...")
     result = _smart_nlp_fallback(review_text, star_rating)
     print(f"  ✓ NLP → {[r['category'] for r in result]}")
