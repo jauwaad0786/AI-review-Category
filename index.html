@@ -1,0 +1,827 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>easeMyDeal · Review Intelligence</title>
+<link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Sans:ital,wght@0,300;0,400;0,500;1,300&display=swap" rel="stylesheet"/>
+<style>
+:root {
+  --bg: #0d0f14;
+  --surface: #13161e;
+  --surface2: #1a1e28;
+  --border: rgba(255,255,255,0.07);
+  --border2: rgba(255,255,255,0.12);
+  --text: #e8eaf0;
+  --muted: #7a7f94;
+  --accent: #4f6ef7;
+  --accent2: #7c3aed;
+  --gold: #f5a623;
+  --green: #22c55e;
+  --red: #ef4444;
+  --orange: #f97316;
+  --font-display: 'Syne', sans-serif;
+  --font-body: 'DM Sans', sans-serif;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-body);
+  font-size: 14px;
+  min-height: 100vh;
+}
+
+/* ── Layout ── */
+.shell { display: flex; min-height: 100vh; }
+.sidebar {
+  width: 220px; min-height: 100vh;
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+  display: flex; flex-direction: column;
+  padding: 24px 0;
+  position: fixed; top: 0; left: 0; bottom: 0;
+  z-index: 10;
+}
+.main { margin-left: 220px; padding: 32px; flex: 1; }
+
+/* ── Sidebar ── */
+.logo {
+  font-family: var(--font-display);
+  font-size: 16px; font-weight: 800;
+  color: var(--text);
+  padding: 0 20px 28px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 16px;
+}
+.logo span { color: var(--accent); }
+.logo small { display: block; font-size: 10px; font-weight: 400; color: var(--muted); margin-top: 2px; letter-spacing: .08em; text-transform: uppercase; font-family: var(--font-body); }
+.nav-item {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 20px; cursor: pointer;
+  color: var(--muted); font-size: 13px;
+  transition: all .2s; border-left: 2px solid transparent;
+}
+.nav-item:hover { color: var(--text); background: rgba(255,255,255,.03); }
+.nav-item.active { color: var(--text); border-left-color: var(--accent); background: rgba(79,110,247,.08); }
+.nav-icon { font-size: 15px; }
+.sidebar-bottom { margin-top: auto; padding: 16px 20px; border-top: 1px solid var(--border); }
+.worker-status { display: flex; align-items: center; gap: 8px; font-size: 11px; color: var(--muted); }
+.dot { width: 7px; height: 7px; border-radius: 50%; background: var(--green); animation: pulse 2s infinite; }
+@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
+.dot.inactive { background: var(--red); animation: none; }
+
+/* ── Header ── */
+.page-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 28px; }
+.page-title { font-family: var(--font-display); font-size: 20px; font-weight: 700; }
+.page-title span { color: var(--accent); }
+.last-refresh { font-size: 12px; color: var(--muted); }
+
+/* ── Stat Cards ── */
+.stats-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 28px; }
+.stat-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px; padding: 20px;
+  position: relative; overflow: hidden;
+}
+.stat-card::before {
+  content: ''; position: absolute; top: 0; left: 0; right: 0; height: 2px;
+}
+.stat-card.blue::before { background: linear-gradient(90deg, var(--accent), var(--accent2)); }
+.stat-card.gold::before { background: linear-gradient(90deg, var(--gold), var(--orange)); }
+.stat-card.green::before { background: var(--green); }
+.stat-card.red::before { background: var(--red); }
+.stat-label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .08em; margin-bottom: 8px; }
+.stat-value { font-family: var(--font-display); font-size: 32px; font-weight: 700; line-height: 1; }
+.stat-sub { font-size: 11px; color: var(--muted); margin-top: 6px; }
+
+/* ── Two col layout ── */
+.two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 20px; }
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px; overflow: hidden;
+}
+.card-head {
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; justify-content: space-between;
+}
+.card-title { font-family: var(--font-display); font-size: 14px; font-weight: 600; }
+.card-body { padding: 20px; }
+
+/* ── Category bars ── */
+.cat-row { margin-bottom: 16px; }
+.cat-top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
+.cat-name { font-size: 13px; color: var(--text); }
+.cat-meta { display: flex; align-items: center; gap: 8px; }
+.cat-star { font-size: 12px; font-weight: 600; }
+.cat-count { font-size: 11px; color: var(--muted); }
+.bar-track {
+  height: 6px; background: rgba(255,255,255,.06);
+  border-radius: 3px; overflow: hidden;
+}
+.bar-fill {
+  height: 6px; border-radius: 3px;
+  transition: width 1s cubic-bezier(.4,0,.2,1);
+}
+
+/* ── Star display ── */
+.stars { color: var(--gold); letter-spacing: 1px; font-size: 12px; }
+.star-empty { color: rgba(255,255,255,.15); }
+
+/* ── Reviews list ── */
+.review-list { display: flex; flex-direction: column; gap: 12px; }
+.review-card {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 10px; padding: 16px;
+  transition: border-color .2s;
+}
+.review-card:hover { border-color: var(--border2); }
+.review-top { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+.user-avatar {
+  width: 32px; height: 32px; border-radius: 50%;
+  background: linear-gradient(135deg, var(--accent), var(--accent2));
+  display: flex; align-items: center; justify-content: center;
+  font-family: var(--font-display); font-size: 12px; font-weight: 700;
+  color: #fff; flex-shrink: 0;
+}
+.review-meta { flex: 1; }
+.review-user { font-size: 13px; font-weight: 500; }
+.review-date { font-size: 11px; color: var(--muted); }
+.review-text {
+  font-size: 13px; color: rgba(232,234,240,.75);
+  line-height: 1.6; margin-bottom: 10px;
+}
+.review-cats { display: flex; flex-wrap: wrap; gap: 6px; }
+.cat-tag {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 3px 10px; border-radius: 20px;
+  background: rgba(255,255,255,.05);
+  border: 1px solid var(--border);
+  font-size: 11px; color: var(--muted);
+}
+.cat-tag .dot-star { color: var(--gold); font-size: 10px; }
+.processing-badge {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 3px 10px; border-radius: 20px;
+  background: rgba(249,115,22,.1);
+  border: 1px solid rgba(249,115,22,.25);
+  font-size: 11px; color: var(--orange);
+}
+.processing-spin {
+  width: 8px; height: 8px; border: 1.5px solid var(--orange);
+  border-top-color: transparent; border-radius: 50%;
+  animation: spin .8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ── Submit Form ── */
+.form-section { margin-bottom: 28px; }
+.form-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px; padding: 24px;
+}
+.form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 16px; }
+.form-group { display: flex; flex-direction: column; gap: 6px; }
+label { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
+input, textarea, select {
+  background: var(--surface2); border: 1px solid var(--border2);
+  border-radius: 8px; padding: 10px 14px;
+  color: var(--text); font-family: var(--font-body); font-size: 14px;
+  outline: none; transition: border-color .2s;
+}
+input:focus, textarea:focus, select:focus { border-color: var(--accent); }
+textarea { resize: vertical; min-height: 80px; }
+.star-selector { display: flex; gap: 6px; }
+.star-btn {
+  width: 36px; height: 36px; border-radius: 8px;
+  border: 1px solid var(--border2); background: var(--surface2);
+  color: var(--muted); cursor: pointer; font-size: 16px;
+  transition: all .15s; display: flex; align-items: center; justify-content: center;
+}
+.star-btn.selected { background: rgba(245,166,35,.15); border-color: var(--gold); color: var(--gold); }
+.submit-btn {
+  background: linear-gradient(135deg, var(--accent), var(--accent2));
+  border: none; border-radius: 8px; padding: 11px 28px;
+  color: #fff; font-family: var(--font-display); font-size: 14px;
+  font-weight: 600; cursor: pointer; transition: opacity .2s;
+}
+.submit-btn:hover { opacity: .85; }
+.submit-btn:disabled { opacity: .4; cursor: not-allowed; }
+
+/* ── Tab bar ── */
+.tabs { display: flex; gap: 2px; background: var(--surface2); border-radius: 8px; padding: 3px; margin-bottom: 20px; width: fit-content; }
+.tab {
+  padding: 7px 18px; border-radius: 6px; cursor: pointer;
+  font-size: 13px; color: var(--muted); transition: all .2s;
+}
+.tab.active { background: var(--surface); color: var(--text); font-weight: 500; }
+
+/* ── Toast ── */
+.toast {
+  position: fixed; bottom: 24px; right: 24px;
+  background: var(--surface2); border: 1px solid var(--border2);
+  border-radius: 10px; padding: 14px 20px;
+  font-size: 13px; color: var(--text);
+  transform: translateY(80px); opacity: 0;
+  transition: all .3s; z-index: 999;
+}
+.toast.show { transform: translateY(0); opacity: 1; }
+.toast.success { border-color: rgba(34,197,94,.4); }
+.toast.error { border-color: rgba(239,68,68,.4); }
+
+/* ── Responsive ── */
+@media (max-width: 900px) {
+  .sidebar { display: none; }
+  .main { margin-left: 0; padding: 20px; }
+  .stats-grid { grid-template-columns: 1fr 1fr; }
+  .two-col { grid-template-columns: 1fr; }
+  .form-row { grid-template-columns: 1fr; }
+}
+
+/* ── Skeleton loader ── */
+.skeleton {
+  background: linear-gradient(90deg, var(--surface) 25%, var(--surface2) 50%, var(--surface) 75%);
+  background-size: 400% 100%;
+  animation: shimmer 1.5s infinite;
+  border-radius: 6px;
+}
+@keyframes shimmer { 0%{background-position:100% 0} 100%{background-position:-100% 0} }
+</style>
+</head>
+<body>
+<div class="shell">
+
+  <!-- Sidebar -->
+  <aside class="sidebar">
+    <div class="logo">
+      ease<span>My</span>Deal
+      <small>Review Intelligence</small>
+    </div>
+  <nav>
+    <div class="nav-item active" data-tab="dashboard" onclick="showTab('dashboard')">
+      <span class="nav-icon">◈</span> Dashboard
+    </div>
+    <div class="nav-item" data-tab="reviews" onclick="showTab('reviews')">
+      <span class="nav-icon">☰</span> All Reviews
+    </div>
+    <div class="nav-item" data-tab="rejected" onclick="showTab('rejected')">
+      <span class="nav-icon">✗</span> Rejected
+    </div>
+    <div class="nav-item" data-tab="submit" onclick="showTab('submit')">
+      <span class="nav-icon">＋</span> Submit Review
+    </div>
+    <div style="padding:12px 20px 4px;font-size:10px;color:var(--muted);
+      text-transform:uppercase;letter-spacing:.08em;margin-top:8px">
+      Sellers
+    </div>
+    <div id="seller-list"></div>
+  </nav>
+    <div class="sidebar-bottom">
+      <div class="worker-status">
+        <div class="dot" id="worker-dot"></div>
+        <span id="worker-label">AI Worker Active</span>
+      </div>
+      <div style="margin-top:8px;font-size:11px;color:var(--muted)" id="pending-label"></div>
+    </div>
+  </aside>
+
+  <!-- Main -->
+  <main class="main">
+
+    <!-- ── DASHBOARD TAB ── -->
+    <div id="tab-dashboard">
+      <div class="page-header">
+        <div class="page-title">Review <span>Intelligence</span></div>
+        <div style="display:flex;align-items:center;gap:12px">
+          <span class="last-refresh" id="refresh-time"></span>
+          <button class="submit-btn" style="padding:8px 18px;font-size:13px" onclick="loadAll()">↻ Refresh</button>
+        </div>
+      </div>
+
+      <!-- Stat cards -->
+      <div class="stats-grid" id="stat-cards">
+        <div class="stat-card blue"><div class="stat-label">Overall Rating</div><div class="stat-value skeleton" style="height:40px;width:80px"> </div></div>
+        <div class="stat-card gold"><div class="stat-label">Total Reviews</div><div class="stat-value skeleton" style="height:40px;width:60px"> </div></div>
+        <div class="stat-card green"><div class="stat-label">Categories</div><div class="stat-value skeleton" style="height:40px;width:50px"> </div></div>
+        <div class="stat-card red"><div class="stat-label">Needs Attention</div><div class="stat-value skeleton" style="height:40px;width:60px"> </div></div>
+      </div>
+      <!-- Seller Intent Card -->
+      <div class="card" style="margin-bottom:20px">
+        <div class="card-head">
+          <span class="card-title">Seller Intelligence</span>
+          <button onclick="loadDeepAnalysis()"
+            style="font-size:11px;padding:4px 12px;border-radius:20px;
+            border:1px solid var(--border2);background:transparent;
+            color:var(--muted);cursor:pointer">
+            ↻ Analyze
+          </button>
+        </div>
+        <div class="card-body" id="intent-section">
+          <p style="color:var(--muted);font-size:13px">
+            Click Analyze to generate seller intelligence report
+          </p>
+        </div>
+      </div>
+      <!-- Category bars + Recent reviews -->
+      <div class="two-col">
+        
+
+        <div class="card">
+          <div class="card-head">
+            <span class="card-title">Recent Reviews</span>
+            <span style="font-size:11px;color:var(--muted)" id="processed-count"></span>
+          </div>
+          <div class="card-body" id="recent-reviews" style="max-height:380px;overflow-y:auto">
+            <div class="skeleton" style="height:80px;margin-bottom:10px;border-radius:10px"></div>
+            <div class="skeleton" style="height:80px;margin-bottom:10px;border-radius:10px"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── ALL REVIEWS TAB ── -->
+    <div id="tab-reviews" style="display:none">
+      <div class="page-header">
+        <div class="page-title">All <span>Reviews</span></div>
+      </div>
+      <div id="all-reviews-list" class="review-list"></div>
+    </div>
+
+    <!-- ── SUBMIT TAB ── -->
+    <div id="tab-submit" style="display:none">
+      <div class="page-header">
+        <div class="page-title">Submit <span>Review</span></div>
+      </div>
+      <div class="form-card">
+        <div class="form-row">
+          <div class="form-group">
+            <label>Seller / Company</label>
+              <select id="f-sellerid">
+                <option value="">-- Select Seller --</option>
+              </select>
+            <label>User ID</label>
+            <input type="number" id="f-userid" placeholder="e.g. 1011" value="1011"/>
+          </div>
+          <div class="form-group">
+            <label>Your Rating</label>
+            <div class="star-selector" id="star-selector">
+              <button class="star-btn" onclick="selectStar(1)">★</button>
+              <button class="star-btn" onclick="selectStar(2)">★</button>
+              <button class="star-btn" onclick="selectStar(3)">★</button>
+              <button class="star-btn" onclick="selectStar(4)">★</button>
+              <button class="star-btn" onclick="selectStar(5)">★</button>
+            </div>
+          </div>
+        </div>
+        <div class="form-group" style="margin-bottom:16px">
+          <label>Review</label>
+          <textarea id="f-review" placeholder="Share your experience with easeMyDeal..."></textarea>
+        </div>
+        <div style="display:flex;align-items:center;gap:12px">
+          <button class="submit-btn" onclick="submitReview()" id="submit-btn">Submit Review</button>
+          <span style="font-size:12px;color:var(--muted)">AI will auto-categorize within 30 seconds</span>
+        </div>
+      </div>
+    </div>
+    <!-- ── REJECTED TAB ── -->
+    <div id="tab-rejected" style="display:none">
+      <div class="page-header">
+        <div class="page-title">Rejected <span>Reviews</span></div>
+      </div>
+      <div id="rejected-list" class="review-list"></div>
+    </div>
+
+  </main>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const API = 'http://localhost:5000/api';
+let SELLER = 1;
+let selectedStar   = 0;
+let allReviewsData = [];
+
+// ── Tab switching ──
+function showTab(name) {
+  ['dashboard','reviews','submit','rejected'].forEach(t => {
+    const el = document.getElementById('tab-' + t);
+    if (el) el.style.display = t === name ? 'block' : 'none';
+  });
+  document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
+  const active = document.querySelector(`.nav-item[data-tab="${name}"]`);
+  if (active) active.classList.add('active');
+  if (name === 'reviews')  renderAllReviews();
+  if (name === 'rejected') loadRejected();
+}
+
+// ── Star selector ──
+function selectStar(n) {
+  selectedStar = n;
+  document.querySelectorAll('.star-btn').forEach((btn, i) => {
+    btn.classList.toggle('selected', i < n);
+  });
+}
+
+// ── Toast ──
+function toast(msg, type='success') {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.className = 'toast show ' + type;
+  setTimeout(() => el.classList.remove('show'), 3000);
+}
+
+function starHTML(avg) {
+  const full = Math.round(avg);
+  let h = '';
+  for (let i = 1; i <= 5; i++)
+    h += `<span class="${i <= full ? 'stars' : 'star-empty'}">★</span>`;
+  return h;
+}
+
+function barColor(avg) {
+  if (avg >= 4) return 'linear-gradient(90deg,#4f6ef7,#7c3aed)';
+  if (avg >= 3) return '#f5a623';
+  return '#ef4444';
+}
+
+function formatDate(dt) {
+  return new Date(dt).toLocaleDateString('en-IN',
+    { day:'2-digit', month:'short', year:'numeric' });
+}
+
+// ── SELLERS LIST ──
+async function loadSellers() {
+  try {
+    const res     = await fetch(`${API}/sellers`);
+    const sellers = await res.json();
+
+    // Sidebar seller list
+    const el = document.getElementById('seller-list');
+    if (el) {
+      el.innerHTML = sellers.map(s => `
+        <div class="nav-item ${s.seller_id == SELLER ? 'active' : ''}"
+             onclick="switchSeller(${s.seller_id})"
+             style="flex-direction:column;align-items:flex-start;gap:2px;padding:8px 20px;cursor:pointer">
+          <span style="font-size:13px;color:var(--text)">Seller ${s.seller_id}</span>
+          <span style="font-size:10px;color:var(--muted)">
+            ${s.approved} approved · ${s.rejected} rejected
+          </span>
+        </div>`).join('');
+    }
+
+    // Submit form dropdown
+    const dd = document.getElementById('f-sellerid');
+    if (dd) {
+      const current = dd.value;
+      dd.innerHTML = '<option value="">-- Select Seller --</option>' +
+        sellers.map(s =>
+          `<option value="${s.seller_id}" ${s.seller_id == current ? 'selected' : ''}>
+            Seller ${s.seller_id} (${s.approved} reviews)
+          </option>`
+        ).join('') +
+        `<option value="new">➕ New Seller</option>`;
+    }
+
+  } catch(e) { console.error('Sellers error', e); }
+}
+// ── DEEP ANALYSIS — Seller Intent + Dynamic Categories ──
+async function loadDeepAnalysis() {
+  const el = document.getElementById('intent-section');
+  el.innerHTML = `
+    <div style="display:flex;align-items:center;gap:8px;color:var(--muted);font-size:13px">
+      <span class="processing-spin" style="width:12px;height:12px;border:1.5px solid var(--accent);border-top-color:transparent;border-radius:50%;display:inline-block"></span>
+      AI analyzing all reviews...
+    </div>`;
+
+  try {
+    const res  = await fetch(`${API}/seller/${SELLER}/deep-analysis`);
+    const data = await res.json();
+    renderDeepAnalysis(data);
+  } catch(e) {
+    el.innerHTML = '<p style="color:var(--red);font-size:13px">Analysis failed. Check API.</p>';
+  }
+}
+
+function renderDeepAnalysis(data) {
+  const el = document.getElementById('intent-section');
+  if (!data || !data.intent_summary) {
+    el.innerHTML = '<p style="color:var(--muted);font-size:13px">No data available</p>';
+    return;
+  }
+
+  const cats = (data.categories || []).map(c => {
+    const pct = (c.avg_star / 5) * 100;
+    const color = c.avg_star >= 4
+      ? 'linear-gradient(90deg,#4f6ef7,#7c3aed)'
+      : c.avg_star >= 3 ? '#f5a623' : '#ef4444';
+    return `
+      <div class="cat-row">
+        <div class="cat-top">
+          <span class="cat-name">${c.name}</span>
+          <div class="cat-meta">
+            <span class="cat-star" style="color:${c.avg_star>=4?'#4f6ef7':c.avg_star>=3?'#f5a623':'#ef4444'}">
+              ${c.avg_star.toFixed(1)}
+            </span>
+            <span class="cat-count">${c.review_count} review${c.review_count>1?'s':''}</span>
+          </div>
+        </div>
+        <div class="bar-track">
+          <div class="bar-fill" style="width:${pct}%;background:${color}"></div>
+        </div>
+      </div>`;
+  }).join('');
+
+  const sourceColor = data.source === 'OpenAI' ? '#22c55e'
+    : data.source === 'Gemini' ? '#4f6ef7' : '#f97316';
+
+  el.innerHTML = `
+    <div style="margin-bottom:16px;padding:14px;background:rgba(79,110,247,.06);
+      border-radius:10px;border-left:3px solid var(--accent)">
+      <div style="font-size:11px;color:var(--muted);margin-bottom:6px;text-transform:uppercase;
+        letter-spacing:.06em">AI Intent Summary</div>
+      <p style="font-size:13px;color:var(--text);line-height:1.7">${data.intent_summary}</p>
+      <div style="margin-top:8px;font-size:10px;color:${sourceColor}">
+        ● Powered by ${data.source || 'NLP'}
+      </div>
+    </div>
+
+    ${cats ? `
+    <div style="font-size:11px;color:var(--muted);text-transform:uppercase;
+      letter-spacing:.06em;margin-bottom:12px">
+      Dynamic Categories (${data.categories.length})
+    </div>
+    ${cats}` : ''}`;
+}
+function switchSeller(id) {
+  SELLER = id;
+  document.querySelectorAll('#seller-list .nav-item').forEach(el => {
+    el.classList.toggle('active', el.onclick.toString().includes(`(${id})`));
+  });
+  document.getElementById('seller-title').textContent = `Seller ${id}`;
+  loadAll();
+}
+
+// ── SUMMARY ──
+async function loadAggregates() {
+  try {
+    const res  = await fetch(`${API}/seller/${SELLER}/summary`);
+    const data = await res.json();
+    renderStats(data);
+    
+  } catch(e) { console.error('Summary error', e); }
+}
+
+function renderStats(data) {
+  const cats = Object.entries(data.categories || {});
+  const weak = cats.filter(([,v]) => v < 3).length;
+  document.getElementById('stat-cards').innerHTML = `
+    <div class="stat-card blue">
+      <div class="stat-label">Overall Rating</div>
+      <div class="stat-value">${Number(data.overall_rating || 0).toFixed(1)}</div>
+      <div class="stat-sub">${starHTML(data.overall_rating || 0)} out of 5</div>
+    </div>
+    <div class="stat-card gold">
+      <div class="stat-label">Total Reviews</div>
+      <div class="stat-value">${data.total_reviews || 0}</div>
+      <div class="stat-sub">approved reviews</div>
+    </div>
+    <div class="stat-card green">
+      <div class="stat-label">Categories</div>
+      <div class="stat-value">${cats.length}</div>
+      <div class="stat-sub">AI tracked</div>
+    </div>
+    <div class="stat-card red">
+      <div class="stat-label">Needs Attention</div>
+      <div class="stat-value">${weak}</div>
+      <div class="stat-sub">below 3 stars</div>
+    </div>`;
+}
+
+
+
+// ── REVIEWS ──
+async function loadReviews() {
+  try {
+    const res = await fetch(`${API}/seller/${SELLER}/reviews`);
+    allReviewsData = await res.json();
+    const done = allReviewsData.filter(r => r.categories && r.categories.length).length;
+    document.getElementById('processed-count').textContent = `${done} categorized`;
+    renderRecentReviews(allReviewsData.slice(0, 5));
+  } catch(e) { console.error('Reviews error', e); }
+}
+
+function reviewCardHTML(r) {
+  const initStr = 'U' + String(r.user_id).slice(-2);
+  const cats = r.categories && r.categories.length
+    ? r.categories.map(c =>
+        `<span class="cat-tag"><span class="dot-star">★</span>${c.star} ${c.category}</span>`
+      ).join('')
+    : `<span class="processing-badge"><span class="processing-spin"></span>AI processing...</span>`;
+  return `
+    <div class="review-card">
+      <div class="review-top">
+        <div class="user-avatar">${initStr}</div>
+        <div class="review-meta">
+          <div class="review-user">User ${r.user_id}</div>
+          <div class="review-date">${formatDate(r.created_at)}</div>
+        </div>
+        <div>${starHTML(r.star_rating)}</div>
+      </div>
+      <div class="review-text">${r.review_text}</div>
+      <div class="review-cats">${cats}</div>
+    </div>`;
+}
+
+function renderRecentReviews(reviews) {
+  document.getElementById('recent-reviews').innerHTML = reviews.length
+    ? `<div class="review-list">${reviews.map(reviewCardHTML).join('')}</div>`
+    : '<p style="color:var(--muted)">No reviews yet</p>';
+}
+
+function renderAllReviews() {
+  document.getElementById('all-reviews-list').innerHTML = allReviewsData.length
+    ? allReviewsData.map(reviewCardHTML).join('')
+    : '<p style="color:var(--muted)">No reviews yet</p>';
+}
+
+// ── REJECTED REVIEWS ──
+async function loadRejected() {
+  try {
+    const res  = await fetch(`${API}/reviews/rejected?seller_id=${SELLER}`);
+    const data = await res.json();
+    const el   = document.getElementById('rejected-list');
+    if (!data.length) {
+      el.innerHTML = '<p style="color:var(--muted)">No rejected reviews for this seller</p>';
+      return;
+    }
+    el.innerHTML = data.map(r => `
+      <div class="review-card" style="border-color:rgba(239,68,68,.3)">
+        <div class="review-top">
+          <div class="user-avatar" style="background:#ef444430;color:#ef4444">
+            U${String(r.user_id).slice(-2)}
+          </div>
+          <div class="review-meta">
+            <div class="review-user">User ${r.user_id} · Seller ${r.seller_id}</div>
+            <div class="review-date">${formatDate(r.created_at)}</div>
+          </div>
+          <div>${starHTML(r.star_rating)}</div>
+        </div>
+        <div class="review-text">${r.review_text}</div>
+        <div style="margin-top:8px">
+          <span style="font-size:11px;padding:2px 10px;border-radius:20px;
+            background:rgba(239,68,68,.1);color:#ef4444;border:1px solid rgba(239,68,68,.3)">
+            ✗ ${r.reject_reason || 'rejected'}
+          </span>
+        </div>
+      </div>`).join('');
+  } catch(e) { console.error('Rejected error', e); }
+}
+
+// ── STATS ──
+async function loadStats() {
+  try {
+    const res = await fetch(`${API}/stats`);
+    const d   = await res.json();
+    document.getElementById('pending-label').textContent =
+      d.pending_reviews > 0 ? `${d.pending_reviews} pending` : 'All processed ✓';
+    document.getElementById('worker-dot').className     = 'dot';
+    document.getElementById('worker-label').textContent = 'AI Worker Active';
+  } catch(e) {
+    document.getElementById('worker-dot').className     = 'dot inactive';
+    document.getElementById('worker-label').textContent = 'API Offline';
+  }
+}
+
+// ── SUBMIT ──
+async function submitReview() {
+  const sellerVal = document.getElementById('f-sellerid').value;
+  const userId    = document.getElementById('f-userid').value;
+  const text      = document.getElementById('f-review').value.trim();
+
+  if (!sellerVal || !userId || !text || !selectedStar) {
+    toast('Fill all fields and select seller + stars', 'error'); return;
+  }
+
+  // New seller — DB mein highest seller_id + 1
+  let sellerId = sellerVal;
+  if (sellerVal === 'new') {
+    try {
+      const res  = await fetch(`${API}/sellers`);
+      const list = await res.json();
+      if (list.length) {
+        const maxId = Math.max(...list.map(s => s.seller_id));
+        sellerId = maxId + 1;
+      } else {
+        sellerId = 1;
+      }
+    } catch(e) {
+      toast('Could not create new seller', 'error'); return;
+    }
+  }
+
+  const btn = document.getElementById('submit-btn');
+  btn.disabled = true; btn.textContent = 'Submitting...';
+
+  try {
+    const res = await fetch(`${API}/reviews`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        seller_id:   parseInt(sellerId),
+        user_id:     parseInt(userId),
+        review_text: text,
+        star_rating: selectedStar
+      })
+    });
+
+    if (res.ok) {
+      const data = await res.json();
+      toast(`✓ Review submitted for Seller ${sellerId}! Processing in ~5 sec`);
+      document.getElementById('f-review').value  = '';
+      document.getElementById('f-userid').value  = '';
+      document.getElementById('f-sellerid').value = '';
+      selectedStar = 0;
+      document.querySelectorAll('.star-btn').forEach(b => b.classList.remove('selected'));
+      // Naye seller pe switch karo automatically
+      SELLER = parseInt(sellerId);
+      setTimeout(() => { loadAll(); showTab('dashboard'); }, 2000);
+    } else {
+      toast('Submission failed', 'error');
+    }
+  } catch(e) {
+    toast('API not reachable. Is Flask running?', 'error');
+  }
+
+  btn.disabled = false; btn.textContent = 'Submit Review';
+}
+let lastAnalysisTime = 0;
+let lastReviewCount = 0;
+
+async function loadAll() {
+  await Promise.all([
+    loadSellers(),
+    loadAggregates(),
+    loadReviews(),
+    loadStats()
+  ]);
+
+  // 🔥 Check if new reviews added
+  const currentCount = allReviewsData.length;
+
+  const now = Date.now();
+
+  // ✅ Condition 1: New review added
+  const newReviewAdded = currentCount > lastReviewCount;
+
+  // ✅ Condition 2: Time-based refresh (30 sec)
+  const timePassed = (now - lastAnalysisTime) > 30000;
+
+  if (newReviewAdded || timePassed) {
+    console.log("🔍 Running AI Deep Analysis...");
+    loadDeepAnalysis();
+
+    lastAnalysisTime = now;
+    lastReviewCount = currentCount;
+  }
+
+  document.getElementById('refresh-time').textContent =
+    'Updated ' + new Date().toLocaleTimeString('en-IN');
+}
+
+// Initial load
+loadAll();
+
+// 🔥 Fast refresh (UI only)
+setInterval(async () => {
+  try {
+    const res = await fetch(`${API}/seller/${SELLER}/reviews`);
+    const data = await res.json();
+
+    const newCount = data.length;
+
+    // 🔥 only refresh if new data
+    if (newCount !== lastReviewCount) {
+      console.log("🆕 New review detected → refreshing UI");
+
+      allReviewsData = data;
+      lastReviewCount = newCount;
+
+      renderRecentReviews(allReviewsData.slice(0, 5));
+      renderAllReviews();
+      loadAggregates();
+      loadDeepAnalysis();  // only when needed
+    }
+
+  } catch (e) {
+    console.error("Polling error", e);
+  }
+}, 5000);
+</script>
+</body>
+</html>
