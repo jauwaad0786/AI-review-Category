@@ -65,8 +65,8 @@ HARD_NEGATIVE = [
 # ─────────────────────────────────────────────
 # LAYER 1 — HARD RULES (instant, no API call)
 # ─────────────────────────────────────────────
-def layer1_hard_rules(review_text: str, star_rating: int):
-    text       = review_text.lower().strip()
+def layer1_hard_rules(comment: str, star_rating: int):
+    text       = comment.lower().strip()
     word_count = len(text.split())
 
     if word_count < 2:
@@ -95,7 +95,7 @@ def layer1_hard_rules(review_text: str, star_rating: int):
     if hard_neg_count >= 2:
         return True, "excessive_malicious_language"
 
-    alpha_chars = [c for c in review_text if c.isalpha()]
+    alpha_chars = [c for c in comment if c.isalpha()]
     if len(alpha_chars) > 15:
         upper_ratio = sum(1 for c in alpha_chars if c.isupper()) / len(alpha_chars)
         if upper_ratio > 0.80:
@@ -116,7 +116,7 @@ Analyze this customer review and determine if it is:
 - "malicious": intentionally trying to damage the brand with no real experience
 - "spam": promotional, random, or irrelevant content
 
-Review: "{review_text}"
+Review: "{comment}"
 Star Rating: {star_rating}/5
 
 Rules:
@@ -132,9 +132,9 @@ Return ONLY this JSON, nothing else:
 }}
 """
 
-def layer2_gemini_intent(review_text: str, star_rating: int):
+def layer2_gemini_intent(comment: str, star_rating: int):
     prompt = INTENT_PROMPT.format(
-        review_text=review_text,
+        comment=comment,
         star_rating=star_rating
     )
     payload = {"contents": [{"parts": [{"text": prompt}]}]}
@@ -186,8 +186,8 @@ def layer2_gemini_intent(review_text: str, star_rating: int):
 # ─────────────────────────────────────────────
 # LAYER 3 — PATTERN SCORE
 # ─────────────────────────────────────────────
-def layer3_pattern_score(review_text: str, star_rating: int):
-    text  = review_text.lower()
+def layer3_pattern_score(comment: str, star_rating: int):
+    text  = comment.lower()
     score = 100
 
     hard_neg_count = sum(1 for w in HARD_NEGATIVE if w in text)
@@ -216,20 +216,20 @@ def layer3_pattern_score(review_text: str, star_rating: int):
 # ─────────────────────────────────────────────
 # MAIN MODERATOR
 # ─────────────────────────────────────────────
-def moderate_review(review_text: str, star_rating: int):
-    print(f"  [Moderator] Checking review (stars={star_rating}, words={len(review_text.split())})")
+def moderate_review(comment: str, star_rating: int):
+    print(f"  [Moderator] Checking review (stars={star_rating}, words={len(comment.split())})")
 
-    reject, reason = layer1_hard_rules(review_text, star_rating)
+    reject, reason = layer1_hard_rules(comment, star_rating)
     if reject:
         print(f"  [Moderator] ✗ REJECTED — Layer1: {reason}")
         return "rejected", reason
 
-    reject, reason = layer2_gemini_intent(review_text, star_rating)
+    reject, reason = layer2_gemini_intent(comment, star_rating)
     if reject:
         print(f"  [Moderator] ✗ REJECTED — Layer2: {reason}")
         return "rejected", reason
 
-    reject, score, reason = layer3_pattern_score(review_text, star_rating)
+    reject, score, reason = layer3_pattern_score(comment, star_rating)
     if reject:
         print(f"  [Moderator] ✗ REJECTED — Layer3: {reason}")
         return "rejected", reason

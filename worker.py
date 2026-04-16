@@ -25,9 +25,9 @@ _cat_pool  = ThreadPoolExecutor(max_workers=5,  thread_name_prefix="cat")
 def fetch_pending(conn):
     cursor = conn.cursor(dictionary=True)
     cursor.execute("""
-        SELECT id, seller_id, user_id, review_text, star_rating
+        SELECT id, seller_profile_id, user_id, comment, rating
         FROM reviews
-        WHERE status = 'pending'
+        WHERE status = 0
         ORDER BY created_at ASC
         LIMIT 50
     """)                                            # batch 20 → 50
@@ -42,9 +42,9 @@ def fetch_pending(conn):
 def fetch_approved_unprocessed(conn):
     cursor = conn.cursor(dictionary=True)
     cursor.execute("""
-        SELECT id, seller_id, review_text, star_rating
+        SELECT id, seller_profile_id, comment, rating
         FROM reviews
-        WHERE status = 'approved' AND is_processed = FALSE
+        WHERE status = 1 AND is_processed = 0
         ORDER BY created_at ASC
         LIMIT 50
     """)                                            # batch 20 → 50
@@ -56,7 +56,7 @@ def fetch_approved_unprocessed(conn):
 # ─────────────────────────────────────────────
 # UPDATE review STATUS
 # ─────────────────────────────────────────────
-def update_status(conn, review_id: int, status: str, reason: str = ""):
+def update_status(conn, review_id: int, status: int, reason: str = ""):
     cursor = conn.cursor()
     cursor.execute(
         "UPDATE reviews SET status=%s WHERE id=%s",
@@ -68,7 +68,7 @@ def update_status(conn, review_id: int, status: str, reason: str = ""):
 # ─────────────────────────────────────────────
 # INSERT INTO review_analysis
 # ─────────────────────────────────────────────
-def insert_analysis(conn, review_id: int, seller_id: int, categories: list):
+def insert_analysis(conn, review_id: int, seller_profile_id: int, categories: list):
     cursor = conn.cursor()
     now = datetime.now()
     for item in categories:
@@ -78,16 +78,16 @@ def insert_analysis(conn, review_id: int, seller_id: int, categories: list):
             continue
         cursor.execute("""
             INSERT INTO review_analysis
-                (review_id, seller_id, category, category_star, processed_at)
+                (review_id, seller_profile_id, category, category_star, processed_at)
             VALUES (%s, %s, %s, %s, %s)
-        """, (review_id, seller_id, item["category"], item["category_star"], now))
+        """, (review_id, seller_profile_id, item["category"], item["category_star"], now))
     cursor.close()
 
 
 # ─────────────────────────────────────────────
 # UPDATE tbl_seller_category_rating — INCREMENTAL
 # ─────────────────────────────────────────────
-def update_seller_category_rating(conn, seller_id: int, categories: list):
+def update_seller_category_rating(conn, seller_profile_id: int, categories: list):
     cursor = conn.cursor(dictionary=True)
 
     for item in categories:
@@ -104,8 +104,8 @@ def update_seller_category_rating(conn, seller_id: int, categories: list):
         cursor.execute("""
             SELECT avg_star, total_reviews
             FROM tbl_seller_category_rating
-            WHERE seller_id=%s AND category=%s
-        """, (seller_id, cat))
+            WHERE seller_profile_id=%s AND category=%s
+        """, (seller_profile_id, cat))
         row = cursor.fetchone()
 
         if row:
@@ -115,14 +115,14 @@ def update_seller_category_rating(conn, seller_id: int, categories: list):
             cursor.execute("""
                 UPDATE tbl_seller_category_rating
                 SET avg_star=%s, total_reviews=%s
-                WHERE seller_id=%s AND category=%s
-            """, (new_avg, old_count + 1, seller_id, cat))
+                WHERE seller_profile_id=%s AND category=%s
+            """, (new_avg, old_count + 1, seller_profile_id, cat))
         else:
             cursor.execute("""
                 INSERT INTO tbl_seller_category_rating
-                    (seller_id, category, avg_star, total_reviews)
+                    (seller_profile_id, category, avg_star, total_reviews)
                 VALUES (%s, %s, %s, 1)
-            """, (seller_id, cat, new_star))
+            """, (seller_profile_id, cat, new_star))
 
     cursor.close()
 
@@ -130,30 +130,30 @@ def update_seller_category_rating(conn, seller_id: int, categories: list):
 # ─────────────────────────────────────────────
 # UPDATE tbl_seller_rating — OVERALL INCREMENTAL
 # ─────────────────────────────────────────────
-def update_seller_rating(conn, seller_id: int, star_rating: int):
+def update_seller_rating(conn, seller_profile_id: int, rating: int):
     cursor = conn.cursor(dictionary=True)
 
     cursor.execute("""
         SELECT avg_rating, total_reviews
         FROM tbl_seller_rating
-        WHERE seller_id=%s
-    """, (seller_id,))
+        WHERE seller_profile_id=%s
+    """, (seller_profile_id,))
     row = cursor.fetchone()
 
     if row:
         old_avg   = float(row["avg_rating"])
         old_count = int(row["total_reviews"])
-        new_avg   = round((old_avg * old_count + star_rating) / (old_count + 1), 2)
+        new_avg   = round((old_avg * old_count + rating) / (old_count + 1), 2)
         cursor.execute("""
             UPDATE tbl_seller_rating
             SET avg_rating=%s, total_reviews=%s
-            WHERE seller_id=%s
-        """, (new_avg, old_count + 1, seller_id))
+            WHERE seller_profile_id=%s
+        """, (new_avg, old_count + 1, seller_profile_id))
     else:
         cursor.execute("""
-            INSERT INTO tbl_seller_rating (seller_id, avg_rating, total_reviews)
+            INSERT INTO tbl_seller_rating (seller_profile_id, avg_rating, total_reviews)
             VALUES (%s, %s, 1)
-        """, (seller_id, star_rating))
+        """, (seller_profile_id, rating))
 
     cursor.close()
 
@@ -164,7 +164,7 @@ def update_seller_rating(conn, seller_id: int, star_rating: int):
 def mark_processed(conn, review_id: int):
     cursor = conn.cursor()
     cursor.execute(
-        "UPDATE reviews SET is_processed=TRUE WHERE id=%s",
+        "UPDATE reviews SET is_processed=1 WHERE id=%s",
         (review_id,)
     )
     cursor.close()
@@ -175,17 +175,25 @@ def mark_processed(conn, review_id: int):
 # ─────────────────────────────────────────────
 def run_moderation(review: dict):
     review_id   = review["id"]
-    review_text = review["review_text"]
-    star_rating = review["star_rating"]
+    comment = review["comment"]
+    rating = review["rating"]
+
+
 
     print(f"[{datetime.now().strftime('%H:%M:%S')}] Moderating id={review_id}")
-    status, reason = moderate_review(review_text, star_rating)
+    status_str, reason = moderate_review(comment, rating)
+    if status_str == "approved":
+        status = 1
+    elif status_str == "rejected":
+        status = 2
+    else:
+        status = 0
 
     conn = get_connection()
     try:
         update_status(conn, review_id, status, reason)
         conn.commit()
-        icon = "✓ APPROVED" if status == "approved" else "✗ REJECTED"
+        icon = "✓ APPROVED" if status == 1 else "✗ REJECTED"
         print(f"  {icon} id={review_id} | {reason}")
     except Exception as e:
         conn.rollback()
@@ -199,20 +207,20 @@ def run_moderation(review: dict):
 # ─────────────────────────────────────────────
 def run_categorization(review: dict):
     review_id   = review["id"]
-    seller_id   = review["seller_id"]
-    review_text = review["review_text"]
-    star_rating = review["star_rating"]
+    seller_profile_id   = review["seller_profile_id"]
+    comment = review["comment"]
+    rating = review["rating"]
 
-    print(f"[{datetime.now().strftime('%H:%M:%S')}] Categorizing id={review_id} seller={seller_id}")
+    print(f"[{datetime.now().strftime('%H:%M:%S')}] Categorizing id={review_id} seller={seller_profile_id}")
 
     try:
-        categories = analyze_review(review_text, star_rating)
+        categories = analyze_review(comment, rating)
     except Exception as e:
         print(f"  analyze_review crashed id={review_id}: {e}")
         categories = []
 
     if not isinstance(categories, list) or len(categories) == 0:
-        categories = [{"category": "Overall Experience", "category_star": star_rating}]
+        categories = [{"category": "Overall Experience", "category_star": rating}]
 
     safe_categories = []
     for cat in categories:
@@ -226,15 +234,15 @@ def run_categorization(review: dict):
         })
 
     if not safe_categories:
-        safe_categories = [{"category": "Overall Experience", "category_star": star_rating}]
+        safe_categories = [{"category": "Overall Experience", "category_star": rating}]
 
     print(f"  Inserting id={review_id}: {safe_categories}")
 
     conn = get_connection()
     try:
-        insert_analysis(conn, review_id, seller_id, safe_categories)
-        update_seller_category_rating(conn, seller_id, safe_categories)
-        update_seller_rating(conn, seller_id, star_rating)
+        insert_analysis(conn, review_id, seller_profile_id, safe_categories)
+        update_seller_category_rating(conn, seller_profile_id, safe_categories)
+        update_seller_rating(conn, seller_profile_id, rating)
         mark_processed(conn, review_id)
         conn.commit()
         print(f"  ✓ Done id={review_id}")

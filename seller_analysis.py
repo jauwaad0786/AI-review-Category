@@ -396,7 +396,7 @@ def _sbert_summary(reviews: list, context: str, avg_rating: float) -> str | None
         from sklearn.cluster import KMeans
         from sklearn.metrics import silhouette_score
 
-        texts      = [r["review_text"] for r in reviews]
+        texts      = [r["comment"] for r in reviews]
         embeddings = sbert.encode(texts, convert_to_numpy=True)
         n          = len(texts)
 
@@ -423,8 +423,8 @@ def _sbert_summary(reviews: list, context: str, avg_rating: float) -> str | None
         neg_themes = []
 
         for cluster_revs in clusters.values():
-            combined  = " ".join(r["review_text"] for r in cluster_revs).lower()
-            avg_star  = sum(r["star_rating"] for r in cluster_revs) / len(cluster_revs)
+            combined  = " ".join(r["comment"] for r in cluster_revs).lower()
+            avg_star = sum(r["rating"] for r in cluster_revs) / len(cluster_revs)
 
             best_topic, best_c = "Overall Experience", 0
             for topic, keywords in TOPIC_MAP.items():
@@ -502,8 +502,8 @@ def _keyword_categories(reviews: list) -> list[dict]:
 
     for r in reviews:
         used_topics: set = set()
-        text  = r["review_text"].lower()
-        stars = r["star_rating"]
+        text  = r["comment"].lower()
+        stars = r["rating"]
 
         raw_sents = re.split(r'[.!?]', text)
         sentences = []
@@ -559,19 +559,19 @@ def _keyword_categories(reviews: list) -> list[dict]:
 
 def _nlp_fallback(reviews: list) -> dict:
     total      = len(reviews)
-    avg_rating = sum(r["star_rating"] for r in reviews) / total if total else 3
-    all_text   = " ".join(r["review_text"] for r in reviews)
+    avg_rating = sum(r["rating"] for r in reviews) / total if total else 3
+    all_text   = " ".join(r["comment"] for r in reviews)
     context    = _detect_context(all_text)
     entity     = ENTITY_LABEL.get(context, "entity")
 
     all_sents: list = []
     star_map: dict  = {}
     for r in reviews:
-        for s in re.split(r'[.!?]', r["review_text"].lower()):
+        for s in re.split(r'[.!?]', r["comment"].lower()):
             s = s.strip()
             if len(s.split()) >= 2:
                 all_sents.append(s)
-                star_map[s] = r["star_rating"]
+                star_map[s] = r["rating"]
 
     categories = _sbert_categories(all_sents, star_map, avg_rating)
 
@@ -587,11 +587,11 @@ def _nlp_fallback(reviews: list) -> dict:
     intent_summary = _sbert_summary(reviews, context, avg_rating)
 
     if not intent_summary:
-        pos_revs   = [r for r in reviews if r["star_rating"] >= 4]
-        neg_revs   = [r for r in reviews if r["star_rating"] < 4]
+        pos_revs   = [r for r in reviews if r["rating"] >= 4]
+        neg_revs   = [r for r in reviews if r["rating"] < 4]
         compressed = (
-            [f"[Positive] {r['review_text'][:80]}" for r in pos_revs[:4]] +
-            [f"[Negative] {r['review_text'][:80]}" for r in neg_revs[:3]]
+            [f"[Positive] {r['comment'][:80]}" for r in pos_revs[:4]] +
+            [f"[Negative] {r['comment'][:80]}" for r in neg_revs[:3]]
         )
         ai_prompt = f"""Business analyst for a multi-domain platform.
 
@@ -620,7 +620,7 @@ Return ONLY the summary text."""
         neg_kws   = [w for w in NEGATIVE_WORDS
                      if re.search(r'\b' + re.escape(w) + r'\b', all_lower)][:2]
         top_cat   = categories[0]["name"] if categories else "Overall Experience"
-        pos_count = sum(1 for r in reviews if r["star_rating"] >= 4)
+        pos_count = sum(1 for r in reviews if r["rating"] >= 4)
         pos_pct   = round(pos_count / total * 100, 1)
         kw_str    = ", ".join(pos_kws) if pos_kws else "quality and service"
         concern   = ", ".join(neg_kws) if neg_kws else None
@@ -658,29 +658,29 @@ Return ONLY the summary text."""
 # ─────────────────────────────────────────────
 # MAIN FUNCTION — api.py se call hota hai
 # ─────────────────────────────────────────────
-def analyze_seller(seller_id: int, reviews: list) -> dict:
+def analyze_seller(seller_profile_id: int, reviews: list) -> dict:
     """
     Input:
-        seller_id : int
-        reviews   : list of {review_text, star_rating, user_id, created_at}
+        seller_profile_id : int
+        reviews   : list of {comment, rating, user_id, created_at}
     Output:
-        {seller_id, total_reviews, intent_summary, categories, source}
+        {seller_profile_id, total_reviews, intent_summary, categories, source}
     """
     total = len(reviews)
 
     if total == 0:
         return {
-            "seller_id":      seller_id,
+            "seller_profile_id":      seller_profile_id,
             "total_reviews":  0,
             "intent_summary": "No approved reviews found yet.",
             "categories":     [],
             "source":         "empty"
         }
 
-    avg_star     = sum(r["star_rating"] for r in reviews) / total
+    avg_star     = sum(r["rating"] for r in reviews) / total
     sampled      = reviews[:30]
     reviews_text = "\n".join(
-        f"[{i+1}] Stars:{r['star_rating']} — {r['review_text']}"
+        f"[{i+1}] Stars:{r['rating']} — {r['comment']}"
         for i, r in enumerate(sampled)
     )
     prompt = _build_prompt(reviews_text, len(sampled))
@@ -689,7 +689,7 @@ def analyze_seller(seller_id: int, reviews: list) -> dict:
         print(f"  [SellerAnalysis] Trying OpenAI...")
         raw    = _call_openai(prompt)
         result = _parse_response(raw, avg_star)
-        result.update({"seller_id": seller_id, "total_reviews": total, "source": "OpenAI"})
+        result.update({"seller_profile_id": seller_profile_id, "total_reviews": total, "source": "OpenAI"})
         print(f"  [SellerAnalysis] OpenAI ok")
         return result
     except Exception as e:
@@ -699,7 +699,7 @@ def analyze_seller(seller_id: int, reviews: list) -> dict:
         print(f"  [SellerAnalysis] Trying Gemini...")
         raw    = _call_gemini(prompt)
         result = _parse_response(raw, avg_star)
-        result.update({"seller_id": seller_id, "total_reviews": total, "source": "Gemini"})
+        result.update({"seller_profile_id": seller_profile_id, "total_reviews": total, "source": "Gemini"})
         print(f"  [SellerAnalysis] Gemini ok")
         return result
     except Exception as e:
@@ -707,5 +707,5 @@ def analyze_seller(seller_id: int, reviews: list) -> dict:
 
     print(f"  [SellerAnalysis] NLP+SBERT fallback")
     result = _nlp_fallback(reviews)
-    result.update({"seller_id": seller_id, "total_reviews": total})
+    result.update({"seller_profile_id": seller_profile_id, "total_reviews": total})
     return result

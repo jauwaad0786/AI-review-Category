@@ -465,10 +465,10 @@ async function loadSellers() {
     const el = document.getElementById('seller-list');
     if (el) {
       el.innerHTML = sellers.map(s => `
-        <div class="nav-item ${s.seller_id == SELLER ? 'active' : ''}"
-             onclick="switchSeller(${s.seller_id})"
+        <div class="nav-item ${s.seller_profile_id == SELLER ? 'active' : ''}"
+             onclick="switchSeller(${s.seller_profile_id})"
              style="flex-direction:column;align-items:flex-start;gap:2px;padding:8px 20px;cursor:pointer">
-          <span style="font-size:13px;color:var(--text)">Seller ${s.seller_id}</span>
+          <span style="font-size:13px;color:var(--text)">Seller ${s.seller_profile_id}</span>
           <span style="font-size:10px;color:var(--muted)">
             ${s.approved} approved · ${s.rejected} rejected
           </span>
@@ -481,8 +481,8 @@ async function loadSellers() {
       const current = dd.value;
       dd.innerHTML = '<option value="">-- Select Seller --</option>' +
         sellers.map(s =>
-          `<option value="${s.seller_id}" ${s.seller_id == current ? 'selected' : ''}>
-            Seller ${s.seller_id} (${s.approved} reviews)
+          `<option value="${s.seller_profile_id}" ${s.seller_profile_id == current ? 'selected' : ''}>
+            Seller ${s.seller_profile_id} (${s.approved} reviews)
           </option>`
         ).join('') +
         `<option value="new">➕ New Seller</option>`;
@@ -631,9 +631,9 @@ function reviewCardHTML(r) {
           <div class="review-user">User ${r.user_id}</div>
           <div class="review-date">${formatDate(r.created_at)}</div>
         </div>
-        <div>${starHTML(r.star_rating)}</div>
+        <div>${starHTML(r.rating)}</div>
       </div>
-      <div class="review-text">${r.review_text}</div>
+      <div class="review-text">${r.comment}</div>
       <div class="review-cats">${cats}</div>
     </div>`;
 }
@@ -653,7 +653,7 @@ function renderAllReviews() {
 // ── REJECTED REVIEWS ──
 async function loadRejected() {
   try {
-    const res  = await fetch(`${API}/reviews/rejected?seller_id=${SELLER}`);
+    const res  = await fetch(`${API}/reviews/rejected?seller_profile_id=${SELLER}`);
     const data = await res.json();
     const el   = document.getElementById('rejected-list');
     if (!data.length) {
@@ -667,12 +667,12 @@ async function loadRejected() {
             U${String(r.user_id).slice(-2)}
           </div>
           <div class="review-meta">
-            <div class="review-user">User ${r.user_id} · Seller ${r.seller_id}</div>
+            <div class="review-user">User ${r.user_id} · Seller ${r.seller_profile_id}</div>
             <div class="review-date">${formatDate(r.created_at)}</div>
           </div>
-          <div>${starHTML(r.star_rating)}</div>
+          <div>${starHTML(r.rating)}</div>
         </div>
-        <div class="review-text">${r.review_text}</div>
+        <div class="review-text">${r.comment}</div>
         <div style="margin-top:8px">
           <span style="font-size:11px;padding:2px 10px;border-radius:20px;
             background:rgba(239,68,68,.1);color:#ef4444;border:1px solid rgba(239,68,68,.3)">
@@ -708,14 +708,14 @@ async function submitReview() {
     toast('Fill all fields and select seller + stars', 'error'); return;
   }
 
-  // New seller — DB mein highest seller_id + 1
+  // New seller — DB mein highest seller_profile_id + 1
   let sellerId = sellerVal;
   if (sellerVal === 'new') {
     try {
       const res  = await fetch(`${API}/sellers`);
       const list = await res.json();
       if (list.length) {
-        const maxId = Math.max(...list.map(s => s.seller_id));
+        const maxId = Math.max(...list.map(s => s.seller_profile_id));
         sellerId = maxId + 1;
       } else {
         sellerId = 1;
@@ -733,10 +733,10 @@ async function submitReview() {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({
-        seller_id:   parseInt(sellerId),
+        seller_profile_id:   parseInt(sellerId),
         user_id:     parseInt(userId),
-        review_text: text,
-        star_rating: selectedStar
+        comment: text,
+        rating: selectedStar
       })
     });
 

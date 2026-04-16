@@ -68,7 +68,7 @@ PROMPT_TEMPLATE = """
 You are an AI review analyst for a multi-domain review platform
 (could be real estate, workplace, product, fintech, consulting, etc.).
 
-Review: "{review_text}"
+Review: "{comment}"
 Overall Rating given by user: {star_rating}/5
 
 YOUR TASK:
@@ -294,8 +294,8 @@ def _nlp_sentiment_star(sentence: str, overall_star: int) -> int:
         return overall_star
 
 
-def _expand_comma_list(review_text: str, star_rating: int) -> list[dict] | None:
-    text = review_text.strip()
+def _expand_comma_list(comment: str, star_rating: int) -> list[dict] | None:
+    text = comment.strip()
     if "," not in text:
         return None
     cleaned = re.sub(r"^(positive|good|great|excellent|amazing|nice)\s*[,:]?\s*",
@@ -332,10 +332,10 @@ def _match_topic(text: str) -> str:
     return "Overall Experience"
 
 
-def _smart_nlp_fallback(review_text: str, star_rating: int) -> list[dict]:
-    text = review_text.lower().strip()
+def _smart_nlp_fallback(comment: str, star_rating: int) -> list[dict]:
+    text = comment.lower().strip()
 
-    expanded = _expand_comma_list(review_text, star_rating)
+    expanded = _expand_comma_list(comment, star_rating)
     if expanded:
         return expanded
 
@@ -372,7 +372,7 @@ def _smart_nlp_fallback(review_text: str, star_rating: int) -> list[dict]:
     return results[:5]
 
 
-def _sbert_fallback(review_text: str, star_rating: int) -> list[dict]:
+def _sbert_fallback(comment: str, star_rating: int) -> list[dict]:
     sbert = _get_sbert()
     if sbert is None:
         raise Exception("SBERT not available")
@@ -381,7 +381,7 @@ def _sbert_fallback(review_text: str, star_rating: int) -> list[dict]:
     from sklearn.metrics import silhouette_score
     import numpy as np
 
-    raw       = re.split(r"[.!?]", review_text.lower())
+    raw       = re.split(r"[.!?]", comment.lower())
     sentences = []
     for s in raw:
         if re.search(r"\bbut\b|\bhowever\b|\balthough\b", s):
@@ -393,7 +393,7 @@ def _sbert_fallback(review_text: str, star_rating: int) -> list[dict]:
     sentences = [s for s in sentences if len(s.split()) >= 2]
 
     if not sentences:
-        return _smart_nlp_fallback(review_text, star_rating)
+        return _smart_nlp_fallback(comment, star_rating)
 
     if len(sentences) == 1:
         cat  = _match_topic(sentences[0])
@@ -413,7 +413,7 @@ def _sbert_fallback(review_text: str, star_rating: int) -> list[dict]:
             pass
 
     if best_labels is None:
-        return _smart_nlp_fallback(review_text, star_rating)
+        return _smart_nlp_fallback(comment, star_rating)
 
     clusters = {}
     for sent, label in zip(sentences, best_labels):
@@ -429,18 +429,18 @@ def _sbert_fallback(review_text: str, star_rating: int) -> list[dict]:
             seen.add(cat)
             results.append({"category": cat, "category_star": star})
 
-    return results[:5] if results else _smart_nlp_fallback(review_text, star_rating)
+    return results[:5] if results else _smart_nlp_fallback(comment, star_rating)
 
 
-def _bert_nlp_fallback(review_text: str, star_rating: int) -> list[dict]:
+def _bert_nlp_fallback(comment: str, star_rating: int) -> list[dict]:
     model      = _get_bert_sentiment()
-    nlp_result = _smart_nlp_fallback(review_text, star_rating)
+    nlp_result = _smart_nlp_fallback(comment, star_rating)
 
     if model is None:
         return nlp_result
 
     try:
-        text_short = review_text[:512]
+        text_short = comment[:512]
         bert_out   = model(text_short)[0]
         label      = bert_out["label"]
         for item in nlp_result:
@@ -457,14 +457,14 @@ def _bert_nlp_fallback(review_text: str, star_rating: int) -> list[dict]:
 # ─────────────────────────────────────────────
 # MAIN FUNCTION — worker calls this
 # ─────────────────────────────────────────────
-def analyze_review(review_text: str, star_rating: int) -> list[dict]:
+def analyze_review(comment: str, star_rating: int) -> list[dict]:
     """
     Returns list of dicts: [{category, category_star}]
     Never returns None. Always at least 1 category.
     Fallback chain: OpenAI → Gemini → SBERT → BERT+NLP → NLP
     """
     prompt = PROMPT_TEMPLATE.format(
-        review_text=review_text,
+        comment=comment,
         star_rating=star_rating
     )
 
@@ -488,7 +488,7 @@ def analyze_review(review_text: str, star_rating: int) -> list[dict]:
 
     try:
         print("  Trying SBERT...")
-        result = _sbert_fallback(review_text, star_rating)
+        result = _sbert_fallback(comment, star_rating)
         if result:
             print(f"  ✓ SBERT → {[r['category'] for r in result]}")
             return result
@@ -497,7 +497,7 @@ def analyze_review(review_text: str, star_rating: int) -> list[dict]:
 
     try:
         print("  Trying BERT+NLP...")
-        result = _bert_nlp_fallback(review_text, star_rating)
+        result = _bert_nlp_fallback(comment, star_rating)
         if result:
             print(f"  ✓ BERT+NLP → {[r['category'] for r in result]}")
             return result
@@ -505,6 +505,6 @@ def analyze_review(review_text: str, star_rating: int) -> list[dict]:
         print(f"  BERT+NLP failed: {e}")
 
     print("  Using NLP fallback...")
-    result = _smart_nlp_fallback(review_text, star_rating)
+    result = _smart_nlp_fallback(comment, star_rating)
     print(f"  ✓ NLP → {[r['category'] for r in result]}")
     return result
