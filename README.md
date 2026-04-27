@@ -43,7 +43,7 @@ Runs on: http://localhost:5000
 ```bash
 python worker.py
 ```
-Polls DB every 30 seconds. Processes unprocessed reviews via Gemini.
+Polls DB every 30 seconds. Processes unprocessed tbl_seller_review via Gemini.
 
 ---
 
@@ -65,8 +65,6 @@ Gemini analyzes sentiment per topic:
 - Device Performance  → 5 stars (positive)
 - Weighted avg ≈ 3.5 (close to user's 4 ★)
 
-This is stored as 2 rows in review_analysis.
-category_aggregates updates incrementally (no full scan).
 
 ---
 
@@ -74,6 +72,6 @@ category_aggregates updates incrementally (no full scan).
 | Method | URL | Description |
 |--------|-----|-------------|
 | GET | /api/aggregates | Category stats for UI |
-| GET | /api/reviews | All reviews with categories |
-| POST | /api/reviews | Submit new review |
+| GET | /api/tbl_seller_review | All tbl_seller_review with categories |
+| POST | /api/tbl_seller_review | Submit new review |
 | GET | /api/stats | Pending count |

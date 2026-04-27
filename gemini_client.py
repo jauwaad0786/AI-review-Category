@@ -28,7 +28,37 @@ _openai_session.headers.update({
     "Content-Type":  "application/json",
     "Authorization": f"Bearer {OPENAI_API_KEY}" if OPENAI_API_KEY else "",
 })
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
+GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
+
+_groq_session = requests.Session()
+_groq_session.headers.update({
+    "Content-Type": "application/json",
+    "Authorization": f"Bearer {GROQ_API_KEY}" if GROQ_API_KEY else "",
+})
+def _call_groq(prompt: str) -> str:
+    for attempt in range(3):
+        res = _groq_session.post(
+            GROQ_URL,
+            json={
+                "model": "llama-3.1-8b-instant",
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": 0.2
+            },
+            timeout=15
+        )
+
+        if res.status_code == 429:
+            time.sleep(2 ** attempt)
+            continue
+
+        if res.status_code != 200:
+            raise Exception(f"Groq HTTP {res.status_code}: {res.text[:150]}")
+
+        return res.json()["choices"][0]["message"]["content"]
+
+    raise Exception("Groq: max retries exceeded")
 # ─────────────────────────────────────────────
 # SBERT + Clustering — lazy load (heavy import)
 # ─────────────────────────────────────────────
@@ -469,8 +499,8 @@ def analyze_review(comment: str, star_rating: int) -> list[dict]:
     )
 
     try:
-        print("  Trying OpenAI...")
-        raw    = _call_openai(prompt)
+        print("  Trying Groq...")
+        raw = _call_groq(prompt)
         result = _parse_json(raw, star_rating)
         print(f"  ✓ OpenAI → {[r['category'] for r in result]}")
         return result

@@ -33,10 +33,10 @@ def _cache_del(key: str):
 
 
 # ─────────────────────────────────────────────
-# POST /api/reviews
+# POST /api/tbl_seller_review
 # New review (goes to pending)
 # ─────────────────────────────────────────────
-@app.route("/api/reviews", methods=["POST"])
+@app.route("/api/tbl_seller_review", methods=["POST"])
 def add_review():
     data = request.get_json()
 
@@ -52,7 +52,7 @@ def add_review():
     try:
         cursor = conn.cursor()
         cursor.execute("""
-            INSERT INTO reviews (seller_profile_id, user_id, comment, rating, status, is_processed)
+            INSERT INTO tbl_seller_review (seller_profile_id, user_id, comment, rating, status, is_processed)
             VALUES (%s, %s, %s, %s, 0, 0)
         """, (seller_profile_id, user_id, comment, rating))
         conn.commit()
@@ -71,16 +71,16 @@ def add_review():
 
 
 # ─────────────────────────────────────────────
-# GET /api/reviews/pending
-# Admin: see pending reviews
+# GET /api/tbl_seller_review/pending
+# Admin: see pending tbl_seller_review
 # ─────────────────────────────────────────────
-@app.route("/api/reviews/pending", methods=["GET"])
-def get_pending_reviews():
+@app.route("/api/tbl_seller_review/pending", methods=["GET"])
+def get_pending_tbl_seller_review():
     conn = get_connection()
     try:
         cursor = conn.cursor(dictionary=True)
         cursor.execute("""
-            SELECT * FROM reviews
+            SELECT * FROM tbl_seller_review
             WHERE status=0
             ORDER BY created_at DESC
             LIMIT 50
@@ -102,13 +102,13 @@ def approve_review(review_id):
     try:
         cursor = conn.cursor()
         cursor.execute(
-            "UPDATE reviews SET status=1 WHERE id=%s",
+            "UPDATE tbl_seller_review SET status=1 WHERE id=%s",
             (review_id,)
         )
         conn.commit()
 
         # Also invalidate seller's summary cache
-        cursor.execute("SELECT seller_profile_id FROM reviews WHERE id=%s", (review_id,))
+        cursor.execute("SELECT seller_profile_id FROM tbl_seller_review WHERE id=%s", (review_id,))
         row = cursor.fetchone()
         if row:
             _cache_del(f"summary:{row[0]}")
@@ -128,7 +128,7 @@ def reject_review(review_id):
     try:
         cursor = conn.cursor()
         cursor.execute(
-            "UPDATE reviews SET status=2 WHERE id=%s",
+            "UPDATE tbl_seller_review SET status=2 WHERE id=%s",
             (review_id,)
         )
         conn.commit()
@@ -153,40 +153,39 @@ def seller_summary(seller_profile_id):
     conn = get_connection()
     try:
         cursor = conn.cursor(dictionary=True)
-
         cursor.execute("""
-            SELECT avg_rating, total_reviews
-            FROM tbl_seller_rating
-            WHERE seller_profile_id=%s
-        """, (seller_profile_id,))
-        overall = cursor.fetchone() or {"avg_rating": 0, "total_reviews": 0}
-
-        cursor.execute("""
-            SELECT category, avg_star
+            SELECT category, avg_star, total_reviews
             FROM tbl_seller_category_rating
             WHERE seller_profile_id=%s
         """, (seller_profile_id,))
-        categories = cursor.fetchall()
+        all_rows = cursor.fetchall()
         cursor.close()
     finally:
         conn.close()
 
+    overall_row = next((r for r in all_rows if r["category"] == "__overall__"), None)
+    overall     = {
+        "avg_rating":    overall_row["avg_star"],
+        "total_reviews": overall_row["total_reviews"]
+    } if overall_row else {"avg_rating": 0, "total_reviews": 0}
+    categories  = [r for r in all_rows if r["category"] != "__overall__"]
+
     result = {
-        "seller_profile_id":      seller_profile_id,
-        "overall_rating": float(overall["avg_rating"]),
-        "total_reviews":  int(overall["total_reviews"]),
-        "categories":     {c["category"]: float(c["avg_star"]) for c in categories}
+        "seller_profile_id": seller_profile_id,
+        "overall_rating":    float(overall["avg_rating"]),
+        "total_reviews":     int(overall["total_reviews"]),
+        "categories":        {c["category"]: float(c["avg_star"]) for c in categories}
     }
     _cache_set(cache_key, result)
     return jsonify(result)
 
 
 # ─────────────────────────────────────────────
-# GET /api/seller/<seller_profile_id>/reviews
-# Approved reviews + categories
+# GET /api/seller/<seller_profile_id>/tbl_seller_review
+# Approved tbl_seller_review + categories
 # ─────────────────────────────────────────────
-@app.route("/api/seller/<int:seller_profile_id>/reviews", methods=["GET"])
-def seller_reviews(seller_profile_id):
+@app.route("/api/seller/<int:seller_profile_id>/tbl_seller_review", methods=["GET"])
+def seller_tbl_seller_review(seller_profile_id):
     conn = get_connection()
     try:
         cursor = conn.cursor(dictionary=True)
@@ -199,8 +198,8 @@ def seller_reviews(seller_profile_id):
                 r.created_at,
                 GROUP_CONCAT(ra.category     ORDER BY ra.id SEPARATOR '||') AS categories,
                 GROUP_CONCAT(ra.category_star ORDER BY ra.id SEPARATOR '||') AS category_stars
-            FROM reviews r
-            LEFT JOIN review_analysis ra ON ra.review_id = r.id
+            FROM tbl_seller_review r
+            LEFT JOIN tbl_seller_review_analysis ra ON ra.review_id = r.id
             WHERE r.seller_profile_id = %s AND r.status=1
             GROUP BY r.id
             ORDER BY r.created_at DESC
@@ -238,17 +237,17 @@ def get_stats():
     conn = get_connection()
     try:
         cursor = conn.cursor(dictionary=True)
-        cursor.execute("SELECT COUNT(*) as total FROM reviews")
+        cursor.execute("SELECT COUNT(*) as total FROM tbl_seller_review")
         total = cursor.fetchone()["total"]
         cursor.execute(
-            "SELECT COUNT(*) as pending FROM reviews WHERE status=0"
+            "SELECT COUNT(*) as pending FROM tbl_seller_review WHERE status=0"
         )
         pending = cursor.fetchone()["pending"]
         cursor.close()
     finally:
         conn.close()
 
-    return jsonify({"total_reviews": total, "pending_reviews": pending})
+    return jsonify({"total_tbl_seller_review": total, "pending_tbl_seller_review": pending})
 
 
 # ─────────────────────────────────────────────
@@ -263,14 +262,14 @@ def get_sellers():
         cursor.execute("""
             SELECT
                 r.seller_profile_id AS seller_profile_id,
-                COUNT(r.id) AS total_reviews,
+                COUNT(r.id) AS total_tbl_seller_review,
                 ROUND(AVG(r.rating), 1) AS avg_rating,
                 SUM(CASE WHEN r.status = 1 THEN 1 ELSE 0 END) AS approved,
                 SUM(CASE WHEN r.status = 2 THEN 1 ELSE 0 END) AS rejected,
                 SUM(CASE WHEN r.status = 0 THEN 1 ELSE 0 END) AS pending
-            FROM reviews r
+            FROM tbl_seller_review r
+            WHERE r.status = 1
             GROUP BY r.seller_profile_id
-            ORDER BY r.seller_profile_id ASC
         """)
         rows = cursor.fetchall()
         cursor.close()
@@ -283,9 +282,9 @@ def get_sellers():
 
 
 # ─────────────────────────────────────────────
-# GET /api/reviews/rejected
+# GET /api/tbl_seller_review/rejected
 # ─────────────────────────────────────────────
-@app.route("/api/reviews/rejected", methods=["GET"])
+@app.route("/api/tbl_seller_review/rejected", methods=["GET"])
 def get_rejected():
     seller_profile_id = request.args.get("seller_profile_id")
     conn = get_connection()
@@ -294,8 +293,8 @@ def get_rejected():
         if seller_profile_id:
             cursor.execute("""
                 SELECT id, seller_profile_id, user_id, comment,
-                    rating, status, reject_reason, created_at
-                FROM reviews
+                    rating, status,  remarks, created_at
+                FROM tbl_seller_review
                 WHERE status = 2 AND seller_profile_id = %s
                 ORDER BY created_at DESC LIMIT 50
             """, (seller_profile_id,))
@@ -303,8 +302,8 @@ def get_rejected():
         else:
             cursor.execute("""
                 SELECT id, seller_profile_id, user_id, comment,
-                    rating, status, reject_reason, created_at
-                FROM reviews
+                    rating, status, remarks, created_at
+                FROM tbl_seller_review
                 WHERE status = 2
                 ORDER BY created_at DESC LIMIT 50
             """)
@@ -330,7 +329,7 @@ def get_sellers_list():
         cursor = conn.cursor(dictionary=True)
         cursor.execute("""
             SELECT DISTINCT seller_profile_id AS seller_profile_id
-            FROM reviews
+            FROM tbl_seller_review
             ORDER BY seller_profile_id ASC
         """)
         rows = cursor.fetchall()
@@ -347,26 +346,44 @@ def get_sellers_list():
 # ─────────────────────────────────────────────
 @app.route("/api/seller/<int:seller_profile_id>/deep-analysis", methods=["GET"])
 def seller_deep_analysis(seller_profile_id):
+    cache_key = f"deep:{seller_profile_id}"
+    cached    = _cache_get(cache_key)
+    if cached:
+        cached["_cached"] = True
+        return jsonify(cached)
+
     conn = get_connection()
     try:
-        cursor = conn.cursor(dictionary=True)
+        # Plain cursor — NO dictionary=True
+        # Python 3.14 MySQLRow is completely broken, even isinstance() crashes
+        cursor = conn.cursor()
         cursor.execute("""
             SELECT user_id, comment, rating, created_at
-            FROM reviews
+            FROM tbl_seller_review
             WHERE seller_profile_id = %s AND status = 1
             ORDER BY created_at DESC
             LIMIT 40
         """, (seller_profile_id,))
-        rows = cursor.fetchall()
+        raw_rows = cursor.fetchall()   # returns plain tuples — 100% safe
         cursor.close()
     finally:
         conn.close()
 
-    for r in rows:
-        if r['created_at']:
-            r['created_at'] = r['created_at'].strftime("%Y-%m-%d %H:%M:%S")
+    # Manually build real Python dicts from tuple positions
+    # SELECT order: user_id=0, comment=1, rating=2, created_at=3
+    rows = []
+    for t in raw_rows:
+        ca = t[3]
+        rows.append({
+            "user_id":    t[0],
+            "comment":    t[1],
+            "rating":     int(t[2]) if t[2] is not None else None,
+            "created_at": ca.strftime("%Y-%m-%d %H:%M:%S") if ca else None,
+        })
 
     result = analyze_seller(seller_profile_id, rows)
+
+    _cache_set(cache_key, result, ttl=120)
     return jsonify(result)
 
 

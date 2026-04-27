@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
+  <link rel="stylesheet" href="styles.css">
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
 <title>easeMyDeal · Review Intelligence</title>
@@ -70,6 +71,9 @@ body {
 .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--green); animation: pulse 2s infinite; }
 @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
 .dot.inactive { background: var(--red); animation: none; }
+
+
+@keyframes slideIn { from{transform:translateX(40px);opacity:0} to{transform:translateX(0);opacity:1} }
 
 /* ── Header ── */
 .page-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 28px; }
@@ -266,7 +270,7 @@ textarea { resize: vertical; min-height: 80px; }
     <div class="nav-item active" data-tab="dashboard" onclick="showTab('dashboard')">
       <span class="nav-icon">◈</span> Dashboard
     </div>
-    <div class="nav-item" data-tab="reviews" onclick="showTab('reviews')">
+    <div class="nav-item" data-tab="tbl_seller_review" onclick="showTab('tbl_seller_review')">
       <span class="nav-icon">☰</span> All Reviews
     </div>
     <div class="nav-item" data-tab="rejected" onclick="showTab('rejected')">
@@ -299,7 +303,7 @@ textarea { resize: vertical; min-height: 80px; }
         <div class="page-title">Review <span>Intelligence</span></div>
         <div style="display:flex;align-items:center;gap:12px">
           <span class="last-refresh" id="refresh-time"></span>
-          <button class="submit-btn" style="padding:8px 18px;font-size:13px" onclick="loadAll()">↻ Refresh</button>
+          <button class="submit-btn refresh-btn" onclick="loadAll()">↻ Refresh</button>
         </div>
       </div>
 
@@ -314,7 +318,7 @@ textarea { resize: vertical; min-height: 80px; }
       <div class="card" style="margin-bottom:20px">
         <div class="card-head">
           <span class="card-title">Seller Intelligence</span>
-          <button onclick="loadDeepAnalysis()"
+          <button onclick="loadDeepAnalysis(true)"
             style="font-size:11px;padding:4px 12px;border-radius:20px;
             border:1px solid var(--border2);background:transparent;
             color:var(--muted);cursor:pointer">
@@ -327,7 +331,7 @@ textarea { resize: vertical; min-height: 80px; }
           </p>
         </div>
       </div>
-      <!-- Category bars + Recent reviews -->
+      <!-- Category bars + Recent tbl_seller_review -->
       <div class="two-col">
         
 
@@ -336,7 +340,7 @@ textarea { resize: vertical; min-height: 80px; }
             <span class="card-title">Recent Reviews</span>
             <span style="font-size:11px;color:var(--muted)" id="processed-count"></span>
           </div>
-          <div class="card-body" id="recent-reviews" style="max-height:380px;overflow-y:auto">
+          <div class="card-body" id="recent-tbl_seller_review" style="max-height:380px;overflow-y:auto">
             <div class="skeleton" style="height:80px;margin-bottom:10px;border-radius:10px"></div>
             <div class="skeleton" style="height:80px;margin-bottom:10px;border-radius:10px"></div>
           </div>
@@ -345,11 +349,11 @@ textarea { resize: vertical; min-height: 80px; }
     </div>
 
     <!-- ── ALL REVIEWS TAB ── -->
-    <div id="tab-reviews" style="display:none">
+    <div id="tab-tbl_seller_review" style="display:none">
       <div class="page-header">
         <div class="page-title">All <span>Reviews</span></div>
       </div>
-      <div id="all-reviews-list" class="review-list"></div>
+      <div id="all-tbl_seller_review-list" class="review-list"></div>
     </div>
 
     <!-- ── SUBMIT TAB ── -->
@@ -399,7 +403,27 @@ textarea { resize: vertical; min-height: 80px; }
   </main>
 </div>
 
-<div class="toast" id="toast"></div>
+<div id="cat-modal" onclick="closeCatModal(event)"
+  style="display:none;position:fixed;inset:0;z-index:100;
+         background:rgba(0,0,0,.55);backdrop-filter:blur(4px)">
+  <div style="position:absolute;right:0;top:0;bottom:0;width:420px;
+              background:var(--surface);border-left:1px solid var(--border2);
+              overflow-y:auto;padding:24px;animation:slideIn .25s ease">
+    <div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:20px">
+      <div>
+        <div id="cat-modal-title"
+          style="font-family:var(--font-display);font-size:16px;font-weight:700"></div>
+        <div id="cat-modal-sub"
+          style="font-size:12px;color:var(--muted);margin-top:4px"></div>
+      </div>
+      <button onclick="document.getElementById('cat-modal').style.display='none'"
+        style="background:transparent;border:1px solid var(--border2);
+               color:var(--muted);border-radius:6px;padding:4px 12px;
+               cursor:pointer;font-size:18px;line-height:1;flex-shrink:0">×</button>
+    </div>
+    <div id="cat-modal-tbl_seller_review" class="review-list"></div>
+  </div>
+</div>
 
 <script>
 const API = 'http://localhost:5000/api';
@@ -409,14 +433,14 @@ let allReviewsData = [];
 
 // ── Tab switching ──
 function showTab(name) {
-  ['dashboard','reviews','submit','rejected'].forEach(t => {
+  ['dashboard','tbl_seller_review','submit','rejected'].forEach(t => {
     const el = document.getElementById('tab-' + t);
     if (el) el.style.display = t === name ? 'block' : 'none';
   });
   document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
   const active = document.querySelector(`.nav-item[data-tab="${name}"]`);
   if (active) active.classList.add('active');
-  if (name === 'reviews')  renderAllReviews();
+  if (name === 'tbl_seller_review')  renderAllReviews();
   if (name === 'rejected') loadRejected();
 }
 
@@ -482,7 +506,7 @@ async function loadSellers() {
       dd.innerHTML = '<option value="">-- Select Seller --</option>' +
         sellers.map(s =>
           `<option value="${s.seller_profile_id}" ${s.seller_profile_id == current ? 'selected' : ''}>
-            Seller ${s.seller_profile_id} (${s.approved} reviews)
+            Seller ${s.seller_profile_id} (${s.approved} tbl_seller_review)
           </option>`
         ).join('') +
         `<option value="new">➕ New Seller</option>`;
@@ -491,12 +515,12 @@ async function loadSellers() {
   } catch(e) { console.error('Sellers error', e); }
 }
 // ── DEEP ANALYSIS — Seller Intent + Dynamic Categories ──
-async function loadDeepAnalysis() {
+async function loadDeepAnalysis(force=false) {
   const el = document.getElementById('intent-section');
   el.innerHTML = `
     <div style="display:flex;align-items:center;gap:8px;color:var(--muted);font-size:13px">
       <span class="processing-spin" style="width:12px;height:12px;border:1.5px solid var(--accent);border-top-color:transparent;border-radius:50%;display:inline-block"></span>
-      AI analyzing all reviews...
+      AI analyzing all tbl_seller_review...
     </div>`;
 
   try {
@@ -521,7 +545,12 @@ function renderDeepAnalysis(data) {
       ? 'linear-gradient(90deg,#4f6ef7,#7c3aed)'
       : c.avg_star >= 3 ? '#f5a623' : '#ef4444';
     return `
-      <div class="cat-row">
+      <div class="cat-row" onclick="showCategoryReviews('${c.name}')"
+        style="cursor:pointer;padding:8px;border-radius:8px;margin:-8px;margin-bottom:8px;transition:background .2s"
+        onmouseover="this.style.background='rgba(255,255,255,.05)'"
+        onmouseout="this.style.background='transparent'">
+
+
         <div class="cat-top">
           <span class="cat-name">${c.name}</span>
           <div class="cat-meta">
@@ -589,7 +618,7 @@ function renderStats(data) {
     <div class="stat-card gold">
       <div class="stat-label">Total Reviews</div>
       <div class="stat-value">${data.total_reviews || 0}</div>
-      <div class="stat-sub">approved reviews</div>
+      <div class="stat-sub">approved tbl_seller_review</div>
     </div>
     <div class="stat-card green">
       <div class="stat-label">Categories</div>
@@ -603,12 +632,109 @@ function renderStats(data) {
     </div>`;
 }
 
+// Keyword map — seller_analysis ke TOPIC_MAP se match karta h
+const CAT_KEYWORDS = {
+  "Overall Experience":  ["good","great","amazing","awesome","nice","excellent","satisfied","happy","recommend","wonderful","fantastic","best","love","overall","impressive","outstanding","superb","positive","brilliant"],
+  "Customer Support":    ["support","customer service","helpline","chat","resolved","responsive","helpful staff","response time","after sales"],
+  "Product Quality":     ["quality","build quality","material","durable","sturdy","defective","broke","poor quality"],
+  "Delivery & Shipping": ["delivery","shipping","dispatch","arrived","courier","packaging","late delivery","fast delivery"],
+  "Agent Communication": ["agent","broker","dealer","follow up","communication","replied","representative"],
+  "Transaction Speed":   ["transaction","transfer","payment","instant","upi","neft","imps","processing","slow transfer"],
+  "App Experience":      ["app","website","platform","portal","ui","ux","interface","navigation","bug","crash","glitch","easy to use"],
+  "Security & Trust":    ["secure","security","fraud","scam","trust","kyc","verification","otp","protected","safe"],
+  "Value for Money":     ["value","worth","money","overpriced","affordable","value for money"],
+  "Return & Refund":     ["return","refund","exchange","replace","money back","cancelled","cancellation"],
+  "Pricing":             ["price","pricing","cost","expensive","commission","fee","charge","affordable"],
+  "Deal Speed":          ["delay","delayed","slow process","fast deal","process time","waited","lengthy process"],
+  "Work Culture":        ["culture","work culture","colleagues","coworkers","environment","atmosphere","inclusive","collaborative","toxic"],
+  "Management":          ["management","manager","leadership","boss","ceo","hierarchy","micromanage","vision"],
+  "Work-Life Balance":   ["work life","work-life","balance","overtime","flexible","remote","hybrid","wfh","burnout","stress"],
+  "Learning & Growth":   ["learning","growth","career","promotion","training","skill","mentorship","opportunity","upskill"],
+  "Office & Facilities": ["office","floor","building","facility","cafeteria","gym","parking","workspace","desk"],
+  "Compensation":        ["salary","pay","hike","increment","bonus","compensation","package","ctc","stipend","benefits","underpaid"],
+  "Professionalism":     ["professional","professionalism","expert","skilled","knowledgeable","competent","expertise"],
+  "Loan & Credit":       ["loan","credit","emi","mortgage","interest","bank","finance","approve","sanction"],
+  "Property Quality":    ["property","flat","apartment","house","plot","construction","possession","floor plan"],
+  "Consulting Quality":  ["consulting","consultant","advisory","advice","recommendation","solution","insight"],
+  "Project Delivery":    ["project","deadline","deliverable","on time","milestone","sprint","delayed project"],
+  "Pricing & Value":     ["price","pricing","cost","expensive","high price","commission","fee","charge","affordable"],
+  "Documentation":       ["document","documentation","legal","registry","lawyer","paperwork","stamp duty"],
+};
+
+function showCategoryReviews(catName) {
+  const norm = s => s.toLowerCase().trim();
+  const normCat = norm(catName);
+
+  // Step 1: DB stored categories se match karo (exact, case-insensitive)
+  let matched = allReviewsData.filter(r =>
+    r.categories && r.categories.some(c => norm(c.category) === normCat)
+  );
+
+  // Step 2: Agar DB match fail — comment text mein keywords search karo
+  if (matched.length === 0) {
+    const keywords = CAT_KEYWORDS[catName]
+      || [normCat.replace(/[^a-z0-9\s]/g, '')];
+    matched = allReviewsData.filter(r => {
+      const text = r.comment.toLowerCase();
+      return keywords.some(kw => text.includes(kw));
+    });
+  }
+
+  // Step 3: Abhi bhi kuch nahi — partial name match try karo
+  if (matched.length === 0) {
+    matched = allReviewsData.filter(r =>
+      r.categories && r.categories.some(c =>
+        norm(c.category).includes(normCat) || normCat.includes(norm(c.category))
+      )
+    );
+  }
+
+  document.getElementById('cat-modal-title').textContent = catName;
+  document.getElementById('cat-modal-sub').textContent = matched.length
+    ? `${matched.length} review${matched.length !== 1 ? 's' : ''} contributed to this category`
+    : 'No matching tbl_seller_review found';
+
+  const el = document.getElementById('cat-modal-tbl_seller_review');
+  if (!matched.length) {
+    el.innerHTML = '<p style="color:var(--muted);font-size:13px">No tbl_seller_review matched for this category.</p>';
+  } else {
+    el.innerHTML = matched.map(r => {
+      const catStar = (r.categories || []).find(c => norm(c.category) === normCat);
+      return `
+        <div class="review-card" style="margin-bottom:0">
+          <div class="review-top">
+            <div class="user-avatar">U${String(r.user_id).slice(-2)}</div>
+            <div class="review-meta">
+              <div class="review-user">User ${r.user_id}</div>
+              <div class="review-date">${formatDate(r.created_at)}</div>
+            </div>
+            <div style="display:flex;flex-direction:column;align-items:flex-end;gap:3px">
+              ${starHTML(r.rating)}
+              ${catStar
+                ? `<span style="font-size:10px;color:var(--gold)">${catName}: ${catStar.star}★</span>`
+                : `<span style="font-size:10px;color:var(--muted)">keyword match</span>`}
+            </div>
+          </div>
+          <div class="review-text">${r.comment}</div>
+        </div>`;
+    }).join('');
+  }
+
+  document.getElementById('cat-modal').style.display = 'block';
+}
+
+function closeCatModal(e) {
+  if (e.target.id === 'cat-modal')
+    document.getElementById('cat-modal').style.display = 'none';
+}
+
+
 
 
 // ── REVIEWS ──
 async function loadReviews() {
   try {
-    const res = await fetch(`${API}/seller/${SELLER}/reviews`);
+    const res = await fetch(`${API}/seller/${SELLER}/tbl_seller_review`);
     allReviewsData = await res.json();
     const done = allReviewsData.filter(r => r.categories && r.categories.length).length;
     document.getElementById('processed-count').textContent = `${done} categorized`;
@@ -638,26 +764,26 @@ function reviewCardHTML(r) {
     </div>`;
 }
 
-function renderRecentReviews(reviews) {
-  document.getElementById('recent-reviews').innerHTML = reviews.length
-    ? `<div class="review-list">${reviews.map(reviewCardHTML).join('')}</div>`
-    : '<p style="color:var(--muted)">No reviews yet</p>';
+function renderRecentReviews(tbl_seller_review) {
+  document.getElementById('recent-tbl_seller_review').innerHTML = tbl_seller_review.length
+    ? `<div class="review-list">${tbl_seller_review.map(reviewCardHTML).join('')}</div>`
+    : '<p style="color:var(--muted)">No tbl_seller_review yet</p>';
 }
 
 function renderAllReviews() {
-  document.getElementById('all-reviews-list').innerHTML = allReviewsData.length
+  document.getElementById('all-tbl_seller_review-list').innerHTML = allReviewsData.length
     ? allReviewsData.map(reviewCardHTML).join('')
-    : '<p style="color:var(--muted)">No reviews yet</p>';
+    : '<p style="color:var(--muted)">No tbl_seller_review yet</p>';
 }
 
 // ── REJECTED REVIEWS ──
 async function loadRejected() {
   try {
-    const res  = await fetch(`${API}/reviews/rejected?seller_profile_id=${SELLER}`);
+    const res  = await fetch(`${API}/tbl_seller_review/rejected?seller_profile_id=${SELLER}`);
     const data = await res.json();
     const el   = document.getElementById('rejected-list');
     if (!data.length) {
-      el.innerHTML = '<p style="color:var(--muted)">No rejected reviews for this seller</p>';
+      el.innerHTML = '<p style="color:var(--muted)">No rejected tbl_seller_review for this seller</p>';
       return;
     }
     el.innerHTML = data.map(r => `
@@ -689,7 +815,7 @@ async function loadStats() {
     const res = await fetch(`${API}/stats`);
     const d   = await res.json();
     document.getElementById('pending-label').textContent =
-      d.pending_reviews > 0 ? `${d.pending_reviews} pending` : 'All processed ✓';
+      d.pending_tbl_seller_review > 0 ? `${d.pending_tbl_seller_review} pending` : 'All processed ✓';
     document.getElementById('worker-dot').className     = 'dot';
     document.getElementById('worker-label').textContent = 'AI Worker Active';
   } catch(e) {
@@ -729,7 +855,7 @@ async function submitReview() {
   btn.disabled = true; btn.textContent = 'Submitting...';
 
   try {
-    const res = await fetch(`${API}/reviews`, {
+    const res = await fetch(`${API}/tbl_seller_review`, {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({
@@ -771,24 +897,18 @@ async function loadAll() {
     loadStats()
   ]);
 
-  // 🔥 Check if new reviews added
+  // 🔥 Check if new tbl_seller_review added
   const currentCount = allReviewsData.length;
 
   const now = Date.now();
 
   // ✅ Condition 1: New review added
-  const newReviewAdded = currentCount > lastReviewCount;
+// 🔥 ALWAYS refresh deep analysis on manual refresh
+console.log("🔍 Running AI Deep Analysis...");
+loadDeepAnalysis();
 
-  // ✅ Condition 2: Time-based refresh (30 sec)
-  const timePassed = (now - lastAnalysisTime) > 30000;
-
-  if (newReviewAdded || timePassed) {
-    console.log("🔍 Running AI Deep Analysis...");
-    loadDeepAnalysis();
-
-    lastAnalysisTime = now;
-    lastReviewCount = currentCount;
-  }
+lastAnalysisTime = now;
+lastReviewCount = currentCount;
 
   document.getElementById('refresh-time').textContent =
     'Updated ' + new Date().toLocaleTimeString('en-IN');
@@ -800,7 +920,7 @@ loadAll();
 // 🔥 Fast refresh (UI only)
 setInterval(async () => {
   try {
-    const res = await fetch(`${API}/seller/${SELLER}/reviews`);
+    const res = await fetch(`${API}/seller/${SELLER}/tbl_seller_review`);
     const data = await res.json();
 
     const newCount = data.length;

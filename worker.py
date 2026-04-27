@@ -8,15 +8,15 @@ from gemini_client import analyze_review
 from moderator import moderate_review
 
 load_dotenv()
-POLL_INTERVAL       = int(os.getenv("POLL_INTERVAL", 10))   # was hardcoded 5
+POLL_INTERVAL = int(os.getenv("POLL_INTERVAL", 10))
 
 # ─────────────────────────────────────────────
 # THREAD POOL — parallel processing
 # Moderation:     10 threads  (I/O-bound: Gemini HTTP call)
 # Categorization:  5 threads  (AI API rate-limited — safer at 5)
 # ─────────────────────────────────────────────
-_mod_pool  = ThreadPoolExecutor(max_workers=10, thread_name_prefix="mod")
-_cat_pool  = ThreadPoolExecutor(max_workers=5,  thread_name_prefix="cat")
+_mod_pool = ThreadPoolExecutor(max_workers=10, thread_name_prefix="mod")
+_cat_pool = ThreadPoolExecutor(max_workers=5,  thread_name_prefix="cat")
 
 
 # ─────────────────────────────────────────────
@@ -26,11 +26,11 @@ def fetch_pending(conn):
     cursor = conn.cursor(dictionary=True)
     cursor.execute("""
         SELECT id, seller_profile_id, user_id, comment, rating
-        FROM reviews
+        FROM tbl_seller_review
         WHERE status = 0
         ORDER BY created_at ASC
         LIMIT 50
-    """)                                            # batch 20 → 50
+    """)
     rows = cursor.fetchall()
     cursor.close()
     return rows
@@ -43,30 +43,30 @@ def fetch_approved_unprocessed(conn):
     cursor = conn.cursor(dictionary=True)
     cursor.execute("""
         SELECT id, seller_profile_id, comment, rating
-        FROM reviews
+        FROM tbl_seller_review
         WHERE status = 1 AND is_processed = 0
         ORDER BY created_at ASC
         LIMIT 50
-    """)                                            # batch 20 → 50
+    """)
     rows = cursor.fetchall()
     cursor.close()
     return rows
 
 
 # ─────────────────────────────────────────────
-# UPDATE review STATUS
+# UPDATE review STATUS + reject_reason
 # ─────────────────────────────────────────────
 def update_status(conn, review_id: int, status: int, reason: str = ""):
     cursor = conn.cursor()
     cursor.execute(
-        "UPDATE reviews SET status=%s WHERE id=%s",
-        (status, review_id)
+        "UPDATE tbl_seller_review SET status=%s, remarks=%s WHERE id=%s",
+        (status, reason if status == 2 else None, review_id)
     )
     cursor.close()
 
 
 # ─────────────────────────────────────────────
-# INSERT INTO review_analysis
+# INSERT INTO tbl_seller_review_analysis
 # ─────────────────────────────────────────────
 def insert_analysis(conn, review_id: int, seller_profile_id: int, categories: list):
     cursor = conn.cursor()
@@ -77,7 +77,7 @@ def insert_analysis(conn, review_id: int, seller_profile_id: int, categories: li
         if "category" not in item or "category_star" not in item:
             continue
         cursor.execute("""
-            INSERT INTO review_analysis
+            INSERT INTO tbl_seller_review_analysis
                 (review_id, seller_profile_id, category, category_star, processed_at)
             VALUES (%s, %s, %s, %s, %s)
         """, (review_id, seller_profile_id, item["category"], item["category_star"], now))
@@ -127,35 +127,7 @@ def update_seller_category_rating(conn, seller_profile_id: int, categories: list
     cursor.close()
 
 
-# ─────────────────────────────────────────────
-# UPDATE tbl_seller_rating — OVERALL INCREMENTAL
-# ─────────────────────────────────────────────
-def update_seller_rating(conn, seller_profile_id: int, rating: int):
-    cursor = conn.cursor(dictionary=True)
 
-    cursor.execute("""
-        SELECT avg_rating, total_reviews
-        FROM tbl_seller_rating
-        WHERE seller_profile_id=%s
-    """, (seller_profile_id,))
-    row = cursor.fetchone()
-
-    if row:
-        old_avg   = float(row["avg_rating"])
-        old_count = int(row["total_reviews"])
-        new_avg   = round((old_avg * old_count + rating) / (old_count + 1), 2)
-        cursor.execute("""
-            UPDATE tbl_seller_rating
-            SET avg_rating=%s, total_reviews=%s
-            WHERE seller_profile_id=%s
-        """, (new_avg, old_count + 1, seller_profile_id))
-    else:
-        cursor.execute("""
-            INSERT INTO tbl_seller_rating (seller_profile_id, avg_rating, total_reviews)
-            VALUES (%s, %s, 1)
-        """, (seller_profile_id, rating))
-
-    cursor.close()
 
 
 # ─────────────────────────────────────────────
@@ -164,7 +136,7 @@ def update_seller_rating(conn, seller_profile_id: int, rating: int):
 def mark_processed(conn, review_id: int):
     cursor = conn.cursor()
     cursor.execute(
-        "UPDATE reviews SET is_processed=1 WHERE id=%s",
+        "UPDATE tbl_seller_review SET is_processed=1 WHERE id=%s",
         (review_id,)
     )
     cursor.close()
@@ -174,14 +146,13 @@ def mark_processed(conn, review_id: int):
 # STEP 1 — MODERATION (runs in thread pool)
 # ─────────────────────────────────────────────
 def run_moderation(review: dict):
-    review_id   = review["id"]
-    comment = review["comment"]
-    rating = review["rating"]
-
-
+    review_id = review["id"]
+    comment   = review["comment"]
+    rating    = review["rating"]
 
     print(f"[{datetime.now().strftime('%H:%M:%S')}] Moderating id={review_id}")
     status_str, reason = moderate_review(comment, rating)
+
     if status_str == "approved":
         status = 1
     elif status_str == "rejected":
@@ -206,10 +177,10 @@ def run_moderation(review: dict):
 # STEP 2 — AI CATEGORIZATION (runs in thread pool)
 # ─────────────────────────────────────────────
 def run_categorization(review: dict):
-    review_id   = review["id"]
-    seller_profile_id   = review["seller_profile_id"]
-    comment = review["comment"]
-    rating = review["rating"]
+    review_id         = review["id"]
+    seller_profile_id = review["seller_profile_id"]
+    comment           = review["comment"]
+    rating            = review["rating"]
 
     print(f"[{datetime.now().strftime('%H:%M:%S')}] Categorizing id={review_id} seller={seller_profile_id}")
 
@@ -229,7 +200,7 @@ def run_categorization(review: dict):
         if "category" not in cat or "category_star" not in cat:
             continue
         safe_categories.append({
-            "category":     str(cat["category"])[:150],
+            "category":      str(cat["category"])[:150],
             "category_star": int(max(1, min(5, cat["category_star"])))
         })
 
@@ -242,7 +213,33 @@ def run_categorization(review: dict):
     try:
         insert_analysis(conn, review_id, seller_profile_id, safe_categories)
         update_seller_category_rating(conn, seller_profile_id, safe_categories)
-        update_seller_rating(conn, seller_profile_id, rating)
+
+    
+        cursor = conn.cursor(dictionary=True)
+        cursor.execute("""
+            SELECT avg_star, total_reviews
+            FROM tbl_seller_category_rating
+            WHERE seller_profile_id=%s AND category='__overall__'
+        """, (seller_profile_id,))
+        row = cursor.fetchone()
+        if row:
+            old_avg   = float(row["avg_star"])
+            old_count = int(row["total_reviews"])
+            new_avg   = round((old_avg * old_count + rating) / (old_count + 1), 2)
+            cursor.execute("""
+                UPDATE tbl_seller_category_rating
+                SET avg_star=%s, total_reviews=%s
+                WHERE seller_profile_id=%s AND category='__overall__'
+            """, (new_avg, old_count + 1, seller_profile_id))
+        else:
+            cursor.execute("""
+                INSERT INTO tbl_seller_category_rating
+                    (seller_profile_id, category, avg_star, total_reviews)
+                VALUES (%s, '__overall__', %s, 1)
+            """, (seller_profile_id, rating))
+        cursor.close()
+        # ────────────────────────────────────────────────────────────────────
+
         mark_processed(conn, review_id)
         conn.commit()
         print(f"  ✓ Done id={review_id}")
@@ -259,7 +256,7 @@ def run_categorization(review: dict):
 
 
 # ─────────────────────────────────────────────
-# PARALLEL BATCH — submit all to thread pool, wait for all
+# PARALLEL BATCH
 # ─────────────────────────────────────────────
 def _run_batch_parallel(pool: ThreadPoolExecutor, fn, items: list, label: str):
     if not items:

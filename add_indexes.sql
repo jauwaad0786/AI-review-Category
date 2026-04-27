@@ -1,33 +1,32 @@
-USE easemydeal_reviews;
+USE easemydeal_tbl_seller_review;
 
--- reviews table
+-- tbl_seller_review table
 
-CREATE INDEX idx_reviews_status
-    ON reviews (status);
+CREATE INDEX idx_tbl_seller_review_status
+    ON tbl_seller_review (status);
 
-CREATE INDEX idx_reviews_status_processed
-    ON reviews (status, is_processed);
+CREATE INDEX idx_tbl_seller_review_status_processed
+    ON tbl_seller_review (status, is_processed);
 
-CREATE INDEX idx_reviews_seller_status
-    ON reviews (seller_profile_id, status);
+CREATE INDEX idx_tbl_seller_review_seller_status
+    ON tbl_seller_review (seller_profile_id, status);
 
-CREATE INDEX idx_reviews_created
-    ON reviews (created_at);
+CREATE INDEX idx_tbl_seller_review_created
+    ON tbl_seller_review (created_at);
 
 
--- review_analysis table
+-- tbl_seller_review_analysis table
 
 CREATE INDEX idx_ra_review_id
-    ON review_analysis (review_id);
+    ON tbl_seller_review_analysis (review_id);
 
 CREATE INDEX idx_ra_seller_profile_id
-    ON review_analysis (seller_profile_id);
+    ON tbl_seller_review_analysis (seller_profile_id);
 
 
--- tbl_seller_rating
 
-CREATE UNIQUE INDEX idx_sr_seller_profile_id
-    ON tbl_seller_rating (seller_profile_id);
+
+
 
 
 -- tbl_seller_category_rating
